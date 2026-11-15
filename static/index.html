@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="zh-Hant-TW">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>雲序｜自選股</title>
+  <link rel="stylesheet" href="/style.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/" aria-label="雲序自選股首頁">
+      <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
+      <span>雲序<span class="brand-divider"></span><span class="brand-subtitle">自選股</span></span>
+    </a>
+    <button class="button button-quiet" id="open-settings" type="button">設定</button>
+  </header>
+  <div class="workspace">
+    <aside class="sidebar" aria-label="篩選自選股">
+      <div class="filter-section">
+        <h2>市場</h2>
+        <div class="filters" id="market-filters" role="group" aria-label="市場"></div>
+      </div>
+      <div class="filter-section">
+        <div class="sidebar-heading">
+          <h2>我的分類</h2>
+          <button class="icon-button" id="open-category" type="button" aria-label="管理分類" title="管理分類">＋</button>
+        </div>
+        <div class="filters" id="category-filters" role="group" aria-label="我的分類"></div>
+      </div>
+      <div class="sidebar-footer"><span id="sync-dot" class="status-dot"></span><span id="sync-status">讀取設定中</span></div>
+    </aside>
+    <main class="content">
+      <div class="page-heading">
+        <div>
+          <h1>自選股</h1>
+          <p id="view-summary" class="summary" aria-live="polite">正在讀取自選清單</p>
+        </div>
+        <button class="button button-primary" id="open-stock" type="button"><span aria-hidden="true">＋</span> 新增股票</button>
+      </div>
+      <p class="notice" id="us-notice" hidden>尚未設定美股行情來源，仍可搜尋並加入美股。</p>
+      <div class="board-heading" aria-label="顯示方式">
+        <div class="view-controls" role="group" aria-label="檢視方式">
+          <button id="grid-view" aria-pressed="true" type="button">網格</button>
+          <button id="focus-view" aria-pressed="false" type="button">單股</button>
+        </div>
+        <label class="focus-picker" id="focus-picker" hidden>股票 <select id="focused-stock"></select></label>
+        <button class="button button-quiet layout-button" id="open-layout" type="button">排列設定</button>
+      </div>
+      <p class="notice" id="page-error" role="alert" hidden></p>
+      <p class="sr-only" id="announcement" role="status" aria-live="polite"></p>
+      <div id="board" class="board" aria-label="自選股行情"></div>
+      <nav class="pagination" id="pagination" aria-label="自選股頁碼" hidden>
+        <button class="button button-quiet" id="previous" type="button">上一頁</button>
+        <span id="page-number"></span>
+        <button class="button button-quiet" id="next" type="button">下一頁</button>
+      </nav>
+    </main>
+  </div>
+  <dialog id="stock-dialog" aria-labelledby="stock-title">
+    <form id="stock-form">
+      <div class="dialog-heading">
+        <h2 id="stock-title">新增股票</h2>
+        <button class="icon-button" data-close type="button" aria-label="關閉">×</button>
+      </div>
+      <label class="field">
+        <span>市場</span>
+        <select id="search-market">
+          <option value="">所有市場</option>
+          <option value="TWSE">台股上市</option>
+          <option value="TPEX">台股上櫃</option>
+          <option value="US">美股</option>
+        </select>
+      </label>
+      <label class="field" for="stock-search">代碼或公司名稱</label>
+      <input id="stock-search" placeholder="例如 233、台積或 Apple" autocomplete="off" role="combobox" aria-autocomplete="list" aria-controls="search-results" aria-expanded="false" maxlength="80">
+      <p id="search-status" class="field-status" role="status">輸入代碼或公司名稱來搜尋</p>
+      <ul class="search-results" id="search-results" role="listbox" aria-label="股票搜尋結果" hidden></ul>
+      <label class="field">
+        <span>分類</span>
+        <select id="stock-category"></select>
+      </label>
+      <p class="notice form-error" role="alert" hidden></p>
+      <footer class="dialog-actions">
+        <button class="button button-quiet" data-close type="button">取消</button>
+        <button class="button button-primary" id="submit-stock" type="submit" disabled>加入自選</button>
+      </footer>
+    </form>
+  </dialog>
+  <dialog id="category-dialog" aria-labelledby="category-title">
+    <form id="category-form">
+      <div class="dialog-heading">
+        <h2 id="category-title">管理分類</h2>
+        <button class="icon-button" data-close type="button" aria-label="關閉">×</button>
+      </div>
+      <label class="field">
+        <span>新分類名稱</span>
+        <input id="new-category" placeholder="例如 半導體" maxlength="40" autocomplete="off" required>
+      </label>
+      <button class="button button-primary" type="submit">新增分類</button>
+      <div id="manage-categories" class="category-list"></div>
+      <p class="notice form-error" role="alert" hidden></p>
+    </form>
+  </dialog>
+  <dialog id="settings-dialog" aria-labelledby="settings-title">
+    <form id="settings-form">
+      <div class="dialog-heading">
+        <h2 id="settings-title">設定</h2>
+        <button class="icon-button" data-close type="button" aria-label="關閉">×</button>
+      </div>
+      <label class="field">
+        <span>歷史收盤價期間</span>
+        <select id="history-months">
+          <option value="1">1 個月</option>
+          <option value="3">3 個月</option>
+          <option value="6">6 個月</option>
+          <option value="12">12 個月</option>
+          <option value="24">24 個月</option>
+        </select>
+      </label>
+      <div class="field-columns">
+        <label class="field"><span>每頁行數</span><select id="layout-rows"></select></label>
+        <label class="field"><span>每行列數</span><select id="layout-columns"></select></label>
+      </div>
+      <p class="field-status">螢幕較窄時，網格會自動減少每行列數。</p>
+      <label class="check-field">
+        <input id="background-fetch" type="checkbox">
+        <span>背景更新歷史行情</span>
+      </label>
+      <p class="notice form-error" role="alert" hidden></p>
+      <footer class="dialog-actions">
+        <button class="button button-quiet" data-close type="button">取消</button>
+        <button class="button button-primary" type="submit">儲存設定</button>
+      </footer>
+    </form>
+  </dialog>
+</body>
+</html>

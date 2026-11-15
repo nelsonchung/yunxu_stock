@@ -1,0 +1,22 @@
+[Unit]
+Description=Yunxu Stock Watchlist
+Wants=network-online.target
+After=network-online.target
+RequiresMountsFor=/media/nelson/work-disk/web-site/yunxu_stock
+
+[Service]
+Type=simple
+User=nelson
+WorkingDirectory=/media/nelson/work-disk/web-site/yunxu_stock
+EnvironmentFile=-/etc/yunxu-stock.env
+ExecStart=/usr/bin/python3 -B -m stockwatch.server --bind 192.168.8.235 --port 8090
+Restart=on-failure
+RestartSec=5
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target
