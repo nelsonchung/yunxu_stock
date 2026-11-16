@@ -3,15 +3,17 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>雲序｜自選股</title>
+  <title>鋆旭觀測站</title>
   <link rel="stylesheet" href="/style.css">
+  <script src="/indicators.js" defer></script>
+  <script src="/technical.js" defer></script>
   <script src="/app.js" defer></script>
 </head>
 <body>
   <header class="topbar">
-    <a class="brand" href="/" aria-label="雲序自選股首頁">
+    <a class="brand" href="/" aria-label="鋆旭觀測站首頁">
       <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
-      <span>雲序<span class="brand-divider"></span><span class="brand-subtitle">自選股</span></span>
+      <span>鋆旭觀測站<span class="brand-divider"></span><span class="brand-subtitle">自選股</span></span>
     </a>
     <button class="button button-quiet" id="open-settings" type="button">設定</button>
   </header>
@@ -55,6 +57,15 @@
         <span id="page-number"></span>
         <button class="button button-quiet" id="next" type="button">下一頁</button>
       </nav>
+      <footer class="data-sources">
+        資料來源
+        <a href="https://openapi.twse.com.tw/">臺灣證券交易所</a>、
+        <a href="https://www.tpex.org.tw/openapi/">證券櫃檯買賣中心</a>、
+        <a href="https://finmind.github.io/tutor/TaiwanMarket/Technical/">FinMind</a>、
+        <a href="https://www.nasdaqtrader.com/trader.aspx?id=symbollookup">Nasdaq Trader</a>、
+        <a href="https://www.alphavantage.co/documentation/#daily">Alpha Vantage</a>
+        <span>。行情與產業資料經整理呈現。</span>
+      </footer>
     </main>
   </div>
   <dialog id="stock-dialog" aria-labelledby="stock-title">
@@ -125,7 +136,7 @@
       <p class="field-status">螢幕較窄時，網格會自動減少每行列數。</p>
       <label class="check-field">
         <input id="background-fetch" type="checkbox">
-        <span>背景更新歷史行情</span>
+        <span>背景更新行情</span>
       </label>
       <p class="notice form-error" role="alert" hidden></p>
       <footer class="dialog-actions">

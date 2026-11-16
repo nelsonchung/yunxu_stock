@@ -12,7 +12,7 @@ from urllib.request import Request, urlopen
 
 from stockwatch.server import make_server
 from stockwatch.store import Store, range_start
-from stockwatch.worker import CATALOG, HISTORY, ProviderError, TAIPEI, Worker, download, parse_history
+from stockwatch.worker import CATALOG, FINMIND_HISTORY, INDUSTRIES, US_HISTORY, ProviderError, TAIPEI, Worker, download, parse_daily_snapshot, parse_us_history
 
 
 class StockWatchTests(unittest.TestCase):
@@ -80,29 +80,30 @@ class StockWatchTests(unittest.TestCase):
                 server.shutdown()
                 thread.join()
 
-    def test_worker_backfill_and_pause(self):
-        seen = []
+    def test_daily_openapi_reuses_catalog_and_preserves_old_history(self):
+        calls = []
         def fetch(url):
-            seen.append(url)
-            self.assertEqual(urlsplit(url).hostname, "www.twse.com.tw")
-            day = "115/10/20" if "20261001" in url else "115/11/14"
-            return json.dumps({"stat": "OK", "data": [[day, "", "", "", "", "", "1,234.50"]]})
+            calls.append(url)
+            self.assertEqual(url, CATALOG["TWSE"])
+            return json.dumps([{"Date": "1151113", "Code": "2330", "Name": "台積電",
+                                "ClosingPrice": "1,234.50"}])
 
         worker = Worker(self.store, fetch, lambda: self.now)
-        for market in CATALOG:
-            worker.reserve(market + "_catalog", 86400, 3)
+        for source in ("TPEX_daily", "US_catalog", "TWSE_industries", "TPEX_industries"):
+            worker.reserve(source, 3 * 86400, 3)
         self.store.action({"action": "add_stock", "market": "TWSE", "symbol": "2330"})
+        self.store.replace_catalog("TWSE", {"2330": "台積電"}, [("2330", "2026-10-20", None, None, None, 1000, None)])
         self.settings(False)
         worker.tick()
-        self.assertEqual(seen, [])
+        points = self.store.state(date(2026, 11, 15), False, False)["stocks"][0]["history"]
+        self.assertEqual(points, [["2026-10-20", 1000]])
         self.settings(True)
         worker.tick()
-        worker.tick()
-        self.assertEqual(len(seen), 1)
-        self.now += 61
+        self.assertEqual(calls, [CATALOG["TWSE"]])
+        self.now += 86400
         worker.tick()
         points = self.store.state(date(2026, 11, 15), False, False)["stocks"][0]["history"]
-        self.assertEqual(points, [["2026-10-20", 1234.5], ["2026-11-14", 1234.5]])
+        self.assertEqual(points, [["2026-10-20", 1000], ["2026-11-13", 1234.5]])
         self.assertEqual(range_start(date(2026, 3, 31), 1), date(2026, 2, 28))
 
     def test_rolling_budget_and_backoff_persist_across_restarts(self):
@@ -122,31 +123,122 @@ class StockWatchTests(unittest.TestCase):
 
     def test_outbound_gap_and_shared_host_cooldown(self):
         worker = Worker(self.store, now=lambda: self.now)
-        tpex = HISTORY["TPEX"]
+        tpex = CATALOG["TPEX"]
         self.assertTrue(worker.reserve("TPEX_history", 60, 48, url=tpex))
         worker.result("TPEX_history", ProviderError("限流", 86400), url=tpex)
         restarted = Worker(Store(self.path), now=lambda: self.now)
-        self.assertFalse(restarted.reserve("TWSE_history", 60, 48, url=HISTORY["TWSE"]))
+        self.assertFalse(restarted.reserve("TWSE_history", 60, 48, url=CATALOG["TWSE"]))
         self.now += 5
-        self.assertTrue(restarted.reserve("TWSE_history", 60, 48, url=HISTORY["TWSE"]))
+        self.assertTrue(restarted.reserve("TWSE_history", 60, 48, url=CATALOG["TWSE"]))
         self.now += 60
         self.assertFalse(restarted.reserve("TPEX_catalog", 60, 3, url=CATALOG["TPEX"]))
 
+    def test_related_companies_use_cached_industry_and_prioritize_foundries(self):
+        self.store.replace_catalog("TWSE", {"2330": "台積電", "6770": "力積電", "2303": "聯電",
+                                           "2454": "聯發科", "2317": "鴻海"})
+        self.store.replace_catalog("TPEX", {"5347": "世界", "6488": "環球晶"})
+        calls = []
+        def fetch(url):
+            calls.append(url)
+            if url == INDUSTRIES["TWSE"]:
+                rows = [("2330", "24", "100"), ("6770", "24", "10"), ("2303", "24", "90"),
+                        ("2454", "24", "80"), ("2317", "31", "800")]
+                return json.dumps([{"公司代號": symbol, "產業別": code, "實收資本額": capital}
+                                   for symbol, code, capital in rows])
+            self.assertEqual(url, INDUSTRIES["TPEX"])
+            return json.dumps([{"SecuritiesCompanyCode": "5347", "SecuritiesIndustryCode": "24"},
+                               {"SecuritiesCompanyCode": "6488", "SecuritiesIndustryCode": "24",
+                                "Paidin.Capital.NTDollars": "70"}])
+
+        worker = Worker(self.store, fetch, lambda: self.now)
+        for market in CATALOG:
+            worker.reserve(market + ("_catalog" if market == "US" else "_daily"), 86400, 3)
+        self.store.action({"action": "add_stock", "market": "TWSE", "symbol": "2330"})
+        self.store.action({"action": "add_stock", "market": "US", "symbol": "AAPL"})
+        self.settings(False)
+        worker.tick()
+        worker.tick()
+        self.assertEqual(calls, [INDUSTRIES["TWSE"]])
+        self.now += 5
+        worker.tick()
+        self.now += 60
+        worker.tick()
+        self.assertEqual(calls, list(INDUSTRIES.values()))
+
+        stock, us = Store(self.path).state(date(2026, 11, 15), False, False)["stocks"]
+        self.assertEqual([(peer["symbol"], peer["relationship"]) for peer in stock["related"]],
+                         [("2303", "晶圓代工同行"), ("6770", "晶圓代工同行"), ("5347", "晶圓代工同行"),
+                          ("2454", "同產業"), ("6488", "同產業")])
+        self.assertEqual(us["related"], [])
+        self.store.action({"action": "add_stock", "market": "TPEX", "symbol": "5347"})
+        self.assertEqual(Store(self.path).state(date(2026, 11, 15), False, False)["stocks"][-1]["symbol"],
+                         "5347")
+
+    def test_finmind_is_opt_in_and_fills_ohlcv_without_replacing_official_bars(self):
+        calls = []
+        def fetch(url):
+            calls.append(url)
+            self.assertEqual(urlsplit(url)._replace(query="").geturl(), FINMIND_HISTORY)
+            self.assertIn("dataset=TaiwanStockPrice&data_id=2330", url)
+            rows = [
+                {"date": day, "stock_id": symbol, "open": 200, "max": 220, "min": 190,
+                 "close": 210, "Trading_Volume": 12345}
+                for day, symbol in [("2026-10-28", "2330"), ("2026-11-13", "2330"), ("2026-11-13", "2337")]
+            ]
+            return json.dumps({"status": 200, "data": rows})
+
+        self.store.action({"action": "add_stock", "market": "TWSE", "symbol": "2330"})
+        self.settings(True)
+        self.store.replace_catalog("TWSE", {"2330": "台積電"}, [
+            ("2330", "2026-10-28", None, None, None, 205, None),
+            ("2330", "2026-11-13", 201, 221, 191, 211, 6789),
+        ])
+        with patch.dict(os.environ, {"FINMIND_HISTORY": "", "ALPHA_VANTAGE_API_KEY": ""}):
+            worker = Worker(self.store, fetch, lambda: self.now)
+        for source in ("TWSE_daily", "TPEX_daily", "US_catalog", "TWSE_industries", "TPEX_industries"):
+            worker.reserve(source, 86400, 3)
+        worker.tick()
+        self.assertEqual(calls, [])
+        with patch.dict(os.environ, {"FINMIND_HISTORY": "1", "ALPHA_VANTAGE_API_KEY": ""}):
+            worker = Worker(self.store, fetch, lambda: self.now)
+        self.settings(False)
+        worker.tick()
+        self.assertEqual(calls, [])
+        self.settings(True)
+        worker.tick()
+        worker.tick()
+        self.assertEqual(len(calls), 1)
+        after = Store(self.path).state(date(2026, 11, 15), False, False, True)["stocks"][0]
+        self.assertEqual(after["candles"], [
+            ["2026-10-28", 200, 220, 190, 210, 12345], ["2026-11-13", 201, 221, 191, 211, 6789]])
+        self.assertEqual(after["history"], [["2026-10-28", 210], ["2026-11-13", 211]])
+        with self.store.connect() as db:
+            self.assertIsNone(db.execute("SELECT 1 FROM prices WHERE symbol='2337'").fetchone())
+
     def test_provider_formats_and_outbound_allowlist(self):
-        local = {"stat": "ok", "tables": [{"data": [["115/11/14", "", "", "", "", "", "98.4"]]}]}
-        self.assertEqual(parse_history("TPEX", json.dumps(local), "2026-11-01"), [("2026-11-14", 98.4)])
+        local = [{"Date": "1151113", "SecuritiesCompanyCode": "5347",
+                  "CompanyName": "世界", "Close": "98.4"}]
+        self.assertEqual(parse_daily_snapshot("TPEX", json.dumps(local)),
+                         ({"5347": "世界"}, [("5347", "2026-11-13", None, None, None, 98.4, None)]))
         us = {"Time Series (Daily)": {"2026-11-13": {"4. close": "225.5"}}}
         with patch.dict(os.environ, {"ALPHA_VANTAGE_API_KEY": "test-only"}):
             def fetch(url):
-                self.assertTrue(url.startswith(HISTORY["US"] + "?"))
+                self.assertTrue(url.startswith(US_HISTORY + "?"))
                 self.assertIn("outputsize=compact", url)
                 return json.dumps(us)
             worker = Worker(self.store, fetch)
             self.store.action({"action": "add_stock", "market": "US", "symbol": "AAPL"})
-            worker.history("US", "AAPL", "", self.now)
+            worker.us_history("AAPL", self.now)
             self.assertEqual(self.store.state(date(2026, 11, 15), True, False)["stocks"][0]["history"],
                              [["2026-11-13", 225.5]])
+        blocked = ("https://mops.twse.com.tw/t57sb01",
+                   "https://www.twse.com.tw/rwd/zh/afterTrading/STOCK_DAY",
+                   "https://www.tpex.org.tw/www/zh-tw/afterTrading/tradingStock",
+                   CATALOG["TWSE"] + "?date=20261113")
+        with patch("stockwatch.worker.build_opener") as opener:
+            for url in blocked:
+                with self.assertRaisesRegex(ProviderError, "未授權"):
+                    download(url)
+            opener.assert_not_called()
         with self.assertRaises(ProviderError):
-            download("https://mops.twse.com.tw/t57sb01")
-        with self.assertRaises(ProviderError):
-            parse_history("US", '{"Information":"rate limit"}', "")
+            parse_us_history('{"Information":"rate limit"}')

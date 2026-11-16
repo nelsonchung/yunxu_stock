@@ -184,9 +184,92 @@ h1 { font-size: clamp(28px, 4vw, 38px); line-height: 1.17; letter-spacing: .02em
 .currency, .quote-date { font-size: 12px; color: var(--muted); }
 .quote-date { margin-inline-start: auto; white-space: nowrap; }
 .chart { width: 100%; height: 138px; display: block; margin-top: 10px; }
-.is-focus .chart { height: clamp(200px, 38vh, 380px); }
 .chart-empty { min-height: 138px; align-content: center; text-align: center; margin-top: 10px; color: var(--secondary); font-size: 13px; background: var(--background); border-radius: 7px; }
-.is-focus .chart-empty { min-height: 200px; }
+.history-coverage { margin-top: 8px; color: var(--secondary); font-size: 13px; font-variant-numeric: tabular-nums; }
+.is-focus .ticker { font-size: 21px; }
+.technical-view { min-width: 0; margin-top: 17px; padding-top: 13px; border-top: 1px solid var(--line); }
+.technical-title { font-size: 18px; }
+.technical-toolbar, .technical-panel-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.technical-toolbar { margin: 10px 0; }
+.technical-control-group, .technical-legend { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; }
+.technical-control-group { padding: 3px; border-radius: 7px; background: var(--background); }
+.technical-control {
+  min-height: 33px;
+  padding: 4px 9px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--secondary);
+  font-size: 12px;
+  white-space: nowrap;
+}
+.technical-control:hover { border-color: var(--line); background: var(--paper); }
+.technical-control[aria-pressed="true"] {
+  border-color: var(--line);
+  background: var(--paper);
+  color: var(--accent-dark);
+  font-weight: 700;
+}
+.technical-metrics {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  column-gap: clamp(13px, 2.5vw, 27px);
+  row-gap: 8px;
+  margin: 0 0 8px;
+  padding: 8px 11px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--background);
+}
+.technical-metric dt { color: var(--secondary); font-size: 11px; }
+.technical-metric dd { margin: 2px 0 0; font-size: 13px; font-weight: 650; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.technical-metric-close dd { font-size: 18px; font-weight: 750; line-height: 1.05; }
+.technical-panel + .technical-panel { border-top: 1px solid var(--line); }
+.technical-panel-heading { min-height: 34px; padding: 4px 0; }
+.technical-panel-heading h3 { font-size: 13px; white-space: nowrap; }
+.technical-legend { column-gap: 8px; font-variant-numeric: tabular-nums; }
+.technical-legend-value { color: var(--series-color, var(--secondary)); font-size: 12px; white-space: nowrap; }
+.technical-average { min-height: 28px; padding: 2px 5px; }
+.technical-average[aria-pressed="true"] { color: var(--series-color); }
+.technical-plot { display: block; width: 100%; height: 120px; cursor: crosshair; }
+.technical-plot-price { height: clamp(235px, 36vh, 315px); }
+.technical-plot-volume { height: 102px; }
+.technical-plot:focus-visible { outline: 2px solid var(--accent); outline-offset: 0; border-radius: 5px; }
+.technical-chart-empty, .technical-help { color: var(--secondary); font-size: 12px; }
+.technical-chart-empty { padding: 8px 0 12px; }
+.technical-help { margin-top: 9px; }
+.related-companies { min-width: 0; padding: 16px; border: 1px solid var(--line); border-radius: 13px; background: var(--paper); }
+.related-companies h2 { font-size: 17px; }
+.related-empty { margin-top: 8px; color: var(--secondary); font-size: 13px; }
+.related-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 255px), 1fr));
+  gap: 8px;
+  margin: 12px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.related-company {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+  padding: 9px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+.related-details { min-width: 0; overflow-wrap: anywhere; }
+.related-name { font-size: 14px; font-weight: 700; }
+.related-meta { margin-top: 2px; color: var(--secondary); font-size: 12px; }
+.related-company .button { flex: none; padding-inline: 8px; font-size: 12px; }
 .card-status { font-size: 12px; color: var(--secondary); margin-top: 8px; overflow-wrap: anywhere; }
 .card-actions { display: flex; gap: 7px; flex-wrap: wrap; align-items: center; justify-content: space-between; padding-top: 10px; margin-top: 10px; border-top: 1px solid var(--line); }
 .card-actions select { max-width: min(100%, 155px); min-height: 34px; font-size: 12px; }
@@ -204,6 +287,8 @@ h1 { font-size: clamp(28px, 4vw, 38px); line-height: 1.17; letter-spacing: .02em
 .empty h2 { font-size: 20px; }
 .empty p { color: var(--secondary); font-size: 14px; }
 .empty .button { margin-top: 4px; }
+.data-sources { margin-top: 24px; color: var(--muted); font-size: 12px; }
+.data-sources a { color: var(--accent-dark); }
 .pagination { display: flex; align-items: center; justify-content: center; margin-top: 20px; gap: 11px; color: var(--secondary); font-size: 13px; }
 dialog {
   width: min(440px, calc(100% - 24px));
@@ -255,8 +340,11 @@ input:not([type="checkbox"]), select {
   .board-heading { margin-top: 17px; }
 }
 @media (max-width: 470px) {
+  .brand-divider, .brand-subtitle { display: none; }
   .board { grid-template-columns: minmax(0, 1fr); }
   .stock-card { padding: 13px; }
   .empty { min-height: 225px; }
-  .is-focus .chart { height: 207px; }
+  .technical-plot-price { height: 230px; }
+  .technical-plot { touch-action: pan-y; }
+  .technical-metrics { padding: 7px 8px; }
 }

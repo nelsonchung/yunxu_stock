@@ -16,6 +16,8 @@ STATIC = Path(__file__).resolve().parent.parent / "static"
 ASSETS = {
     "/": ("index.html", "text/html; charset=utf-8"),
     "/app.js": ("app.js", "text/javascript; charset=utf-8"),
+    "/indicators.js": ("indicators.js", "text/javascript; charset=utf-8"),
+    "/technical.js": ("technical.js", "text/javascript; charset=utf-8"),
     "/style.css": ("style.css", "text/css; charset=utf-8"),
 }
 
@@ -59,7 +61,7 @@ class Handler(BaseHTTPRequestHandler):
         elif target.path == "/api/state":
             worker = self.server.worker
             self.json(HTTPStatus.OK, self.server.store.state(
-                datetime.now(TAIPEI).date(), bool(worker.us_key), worker.us_full))
+                datetime.now(TAIPEI).date(), bool(worker.us_key), worker.us_full, worker.finmind_history))
         elif target.path == "/api/search":
             try:
                 fields = parse_qs(target.query, max_num_fields=8)
@@ -120,10 +122,11 @@ def make_server(bind, port, store, worker):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Yunxu Stock personal dashboard")
+    parser = argparse.ArgumentParser(description="鋆旭觀測站")
     parser.add_argument("--bind", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8090)
     parser.add_argument("--db", type=Path, default=Path("state/stocks.sqlite3"))
+    parser.add_argument("--offline", action="store_true", help="serve without any background requests")
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     args.db.parent.mkdir(parents=True, exist_ok=True)
@@ -133,14 +136,17 @@ def main():
     with make_server(args.bind, args.port, store, worker) as server:
         for signum in (signal.SIGINT, signal.SIGTERM):
             signal.signal(signum, lambda *_: threading.Thread(target=server.shutdown).start())
-        thread = threading.Thread(target=worker.run, args=(stop,), daemon=True)
-        thread.start()
+        thread = None
+        if not args.offline:
+            thread = threading.Thread(target=worker.run, args=(stop,), daemon=True)
+            thread.start()
         logging.info("Serving on %s:%d", args.bind, server.server_port)
         try:
             server.serve_forever()
         finally:
             stop.set()
-            thread.join(timeout=17)
+            if thread is not None:
+                thread.join(timeout=17)
 
 
 if __name__ == "__main__":

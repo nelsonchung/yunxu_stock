@@ -13,22 +13,23 @@ from urllib.parse import urlencode, urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 from zoneinfo import ZoneInfo
 
-from .store import MARKETS, month_key
+from .store import range_start
 
 LOG = logging.getLogger(__name__)
 TAIPEI = ZoneInfo("Asia/Taipei")
-NEW_YORK = ZoneInfo("America/New_York")
 CATALOG = {
     "TWSE": "https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL",
     "TPEX": "https://www.tpex.org.tw/openapi/v1/tpex_mainboard_quotes",
     "US": "https://www.nasdaqtrader.com/dynamic/SymDir/nasdaqtraded.txt",
 }
-HISTORY = {
-    "TWSE": "https://www.twse.com.tw/rwd/zh/afterTrading/STOCK_DAY",
-    "TPEX": "https://www.tpex.org.tw/www/zh-tw/afterTrading/tradingStock",
-    "US": "https://www.alphavantage.co/query",
+INDUSTRIES = {
+    "TWSE": "https://openapi.twse.com.tw/v1/opendata/t187ap03_L",
+    "TPEX": "https://www.tpex.org.tw/openapi/v1/mopsfin_t187ap03_O",
 }
-HOSTS = {urlsplit(url).hostname for url in (*CATALOG.values(), *HISTORY.values())}
+US_HISTORY = "https://www.alphavantage.co/query"
+FINMIND_HISTORY = "https://api.finmindtrade.com/api/v4/data"
+QUERY_ENDPOINTS = {US_HISTORY, FINMIND_HISTORY}
+ALLOWED_ENDPOINTS = {*CATALOG.values(), *INDUSTRIES.values(), *QUERY_ENDPOINTS}
 
 
 class NoRedirect(HTTPRedirectHandler):
@@ -54,7 +55,9 @@ def retry_after(value):
 
 def download(url):
     parts = urlsplit(url)
-    if parts.scheme != "https" or parts.hostname not in HOSTS:
+    endpoint = parts._replace(query="", fragment="").geturl()
+    if (endpoint not in ALLOWED_ENDPOINTS or parts.fragment
+            or (parts.query and endpoint not in QUERY_ENDPOINTS)):
         raise ProviderError("行情來源未授權")
     try:
         req = Request(url, headers={"User-Agent": "YunxuStock/1.0 (personal stock watchlist)"})
@@ -72,57 +75,111 @@ def download(url):
         raise ProviderError("暫時無法連線至行情來源") from None
 
 
-def parse_catalog(market, content):
-    if market == "US":
-        rows = csv.DictReader(io.StringIO(content), delimiter="|")
-        entries = {r["Symbol"]: r["Security Name"].strip() for r in rows
-                   if r.get("Test Issue") == "N" and r.get("Symbol") and r.get("Security Name")}
-    else:
-        code, name = (("Code", "Name") if market == "TWSE"
-                      else ("SecuritiesCompanyCode", "CompanyName"))
-        entries = {r[code].strip(): r[name].strip() for r in json.loads(content)
-                   if r.get(code) and r.get(name)}
-    result = {code: name for code, name in entries.items()
-              if re.fullmatch(r"[A-Z0-9][A-Z0-9.$^/+\-=]{0,19}", code) and name}
+def valid_symbol(symbol):
+    return re.fullmatch(r"[A-Z0-9][A-Z0-9.$^/+\-=]{0,19}", symbol)
+
+
+def parse_catalog(content):
+    rows = csv.DictReader(io.StringIO(content), delimiter="|")
+    entries = {r["Symbol"]: r["Security Name"].strip() for r in rows
+               if r.get("Test Issue") == "N" and r.get("Symbol") and r.get("Security Name")}
+    result = {code: name for code, name in entries.items() if valid_symbol(code) and name}
     if not result:
         raise ProviderError("來源沒有回傳有效股票名錄")
     return result
 
 
-def roc_date(value):
-    y, m, d = map(int, value.split("/"))
-    return date(y + 1911, m, d).isoformat()
-
-
-def parse_history(market, contents, period):
-    payload = json.loads(contents)
-    if market == "US":
-        if "Note" in payload or "Information" in payload:
-            raise ProviderError("美股來源限制請求；請確認金鑰、額度與方案", 86400)
-        if "Time Series (Daily)" not in payload:
-            raise ProviderError("美股來源未提供日線；請確認股票代碼與金鑰", 86400)
-        raw = ((date.fromisoformat(day).isoformat(), row["4. close"])
-               for day, row in payload["Time Series (Daily)"].items())
-    else:
-        if market == "TWSE":
-            if payload.get("stat") == "OK":
-                rows = payload["data"]
-            elif payload.get("stat") in ("很抱歉，沒有符合條件的資料!", "很抱歉，沒有符合條件的資料！"):
-                rows = []
-            else:
-                raise ProviderError("證交所日線格式異常或暫時無法查詢")
-        else:
-            if payload.get("stat") != "ok":
-                raise ProviderError("櫃買中心日線格式異常或暫時無法查詢")
-            rows = payload["tables"][0]["data"]
-        raw = ((roc_date(row[0]), row[6]) for row in rows)
-    points = []
-    for day, value in raw:
-        if value.strip() in ("", "--", "---", "----", "-"):
+def parse_daily_snapshot(market, content):
+    code_key, name_key, fields = (
+        ("Code", "Name", ("OpeningPrice", "HighestPrice", "LowestPrice", "ClosingPrice", "TradeVolume"))
+        if market == "TWSE" else
+        ("SecuritiesCompanyCode", "CompanyName", ("Open", "High", "Low", "Close", "TradingShares"))
+    )
+    catalog, prices = {}, []
+    for row in json.loads(content):
+        symbol, name = row[code_key].strip(), row[name_key].strip()
+        if not valid_symbol(symbol) or not name:
             continue
-        close = float(value.replace(",", ""))
-        if math.isfinite(close) and close > 0 and (not period or day[:7] == period[:7]):
-            points.append((day, close))
+        catalog[symbol] = name
+        bar = daily_bar(row, fields)
+        if bar is None:
+            continue
+        stamp = row["Date"].strip()
+        if not re.fullmatch(r"[0-9]{7}", stamp):
+            raise ProviderError("盤後行情日期格式異常")
+        day = date(int(stamp[:3]) + 1911, int(stamp[3:5]), int(stamp[5:])).isoformat()
+        prices.append((symbol, day, *bar))
+    if not catalog:
+        raise ProviderError("來源沒有回傳有效股票名錄")
+    return catalog, prices
+
+
+def parse_industries(market, content):
+    symbol, industry, capital = (
+        ("公司代號", "產業別", "實收資本額") if market == "TWSE" else
+        ("SecuritiesCompanyCode", "SecuritiesIndustryCode", "Paidin.Capital.NTDollars")
+    )
+    entries = {}
+    for company in json.loads(content):
+        ticker = company[symbol].strip()
+        code = company[industry].strip().zfill(2)
+        if re.fullmatch(r"[0-9]{4}[A-Z]?", ticker) and re.fullmatch(r"[0-9]{2}", code):
+            paid = (company.get(capital) or "").replace(",", "").strip()
+            entries[ticker] = (ticker, code, int(paid) if re.fullmatch(r"[0-9]{1,18}", paid) else 0)
+    if not entries:
+        raise ProviderError("來源沒有回傳有效的產業分類")
+    return entries.values()
+
+
+def price_value(value):
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        price = float(str(value).replace(",", ""))
+    except (ValueError, OverflowError):
+        return None
+    return price if math.isfinite(price) and price > 0 else None
+
+
+def daily_bar(row, fields):
+    opening, high, low, close = (price_value(row.get(key)) for key in fields[:4])
+    if close is None:
+        return None
+    raw_volume = str(row.get(fields[4], "")).replace(",", "").strip()
+    volume = int(raw_volume) if re.fullmatch(r"[0-9]{1,18}", raw_volume) else None
+    if None in (opening, high, low, volume) or not low <= min(opening, close) <= max(opening, close) <= high:
+        return (None, None, None, close, None)
+    return (opening, high, low, close, volume)
+
+
+def parse_us_history(contents):
+    payload = json.loads(contents)
+    if "Note" in payload or "Information" in payload:
+        raise ProviderError("美股來源限制請求；請確認金鑰、額度與方案", 86400)
+    if "Time Series (Daily)" not in payload:
+        raise ProviderError("美股來源未提供日線；請確認股票代碼與金鑰", 86400)
+    points = []
+    for day, row in payload["Time Series (Daily)"].items():
+        bar = daily_bar(row, ("1. open", "2. high", "3. low", "4. close", "5. volume"))
+        if bar is not None:
+            points.append((date.fromisoformat(day).isoformat(), *bar))
+    return points
+
+
+def parse_finmind_history(content, symbol, start, end):
+    payload = json.loads(content)
+    if payload.get("status") in (402, 403, 429):
+        raise ProviderError("FinMind 拒絕或限制請求，歷史 K 線暫停更新", 86400)
+    if payload.get("status") != 200:
+        raise ProviderError("FinMind 歷史 K 線暫時無法取得")
+    points = []
+    for row in payload["data"]:
+        day = date.fromisoformat(row["date"]).isoformat()
+        if row["stock_id"] != symbol or not start <= day <= end:
+            continue
+        bar = daily_bar(row, ("open", "max", "min", "close", "Trading_Volume"))
+        if bar is not None:
+            points.append((symbol, day, *bar))
     return points
 
 
@@ -131,6 +188,7 @@ class Worker:
         self.store, self.fetch, self.now = store, fetch, now
         self.us_key = os.environ.get("ALPHA_VANTAGE_API_KEY", "").strip()
         self.us_full = os.environ.get("ALPHA_VANTAGE_FULL") == "1"
+        self.finmind_history = os.environ.get("FINMIND_HISTORY") == "1"
 
     def reserve(self, source, interval, ceiling, *, url=None):
         now = self.now()
@@ -184,64 +242,95 @@ class Worker:
     def tick(self):
         now = self.now()
         for market, url in CATALOG.items():
-            source = market + "_catalog"
+            source = market + ("_catalog" if market == "US" else "_daily")
             if self.reserve(source, 60, 3, url=url):
-                self.attempt(source, lambda: self.store.replace_catalog(
-                    market, parse_catalog(market, self.fetch(url))), url=url, success_interval=86400)
+                self.attempt(source, lambda: self.refresh_catalog(market, url),
+                             url=url, success_interval=86400)
                 return
 
-        for market in MARKETS:
-            if market == "US" and not self.us_key:
-                continue
-            zone = NEW_YORK if market == "US" else TAIPEI
-            today = datetime.fromtimestamp(now, zone).date()
-            with self.store.connect() as db:
-                settings = self.store.settings(db)
-                if not settings["enabled"]:
-                    return
-                candidates = list(db.execute("""
-                    SELECT s.symbol FROM stocks s LEFT JOIN poll_order p
-                    USING(market,symbol) WHERE s.market=? ORDER BY coalesce(p.attempted,0), s.id
-                """, (market,)))
-                cached = {(r["symbol"], r["period"]): r["updated"] for r in db.execute(
-                    "SELECT symbol,period,updated FROM fetches WHERE market=?", (market,))}
-            periods = ([""] if market == "US" else
-                       [month_key(today, i) for i in range(settings["months"] + 1)])
-            selected = None
-            for row in candidates:
-                symbol = row["symbol"]
-                for i, period in enumerate(periods):
-                    updated = cached.get((symbol, period), 0)
-                    if not updated or (i == 0 and now - updated >= 86400) or (
-                            i > 0 and datetime.fromtimestamp(updated, zone).date().isoformat()
-                            < periods[i - 1]):
-                        selected = symbol, period
-                        break
-                if selected:
-                    break
-            source = market + "_history"
-            url = HISTORY[market]
-            if selected and self.reserve(source, 60, 20 if market == "US" else 48, url=url):
-                with self.store.connect() as db:
-                    db.execute("INSERT OR REPLACE INTO poll_order VALUES (?,?,?)",
-                               (market, selected[0], now))
-                self.attempt(source, lambda: self.history(market, *selected, now), url=url)
+        for market, url in INDUSTRIES.items():
+            source = market + "_industries"
+            if self.reserve(source, 60, 3, url=url):
+                self.attempt(source, lambda: self.store.replace_industries(
+                    market, parse_industries(market, self.fetch(url))), url=url, success_interval=7 * 86400)
                 return
 
-    def history(self, market, symbol, period, now):
-        if market == "TWSE":
-            params = {"date": period.replace("-", ""), "stockNo": symbol, "response": "json"}
-        elif market == "TPEX":
-            params = {"date": period.replace("-", "/"), "code": symbol, "response": "json"}
-        else:
-            params = {"function": "TIME_SERIES_DAILY", "symbol": symbol,
-                      "outputsize": "full" if self.us_full else "compact", "apikey": self.us_key}
-        points = parse_history(market, self.fetch(HISTORY[market] + "?" + urlencode(params)), period)
+        if self.finmind_history and self.backfill_tw(now):
+            return
+        if not self.us_key:
+            return
         with self.store.connect() as db:
-            db.executemany("INSERT OR REPLACE INTO prices VALUES (?,?,?,?)",
-                           ((market, symbol, day, close) for day, close in points))
+            if not self.store.settings(db)["enabled"]:
+                return
+            selected = db.execute("""
+                SELECT s.symbol FROM stocks AS s
+                LEFT JOIN poll_order AS p USING(market,symbol)
+                LEFT JOIN fetches AS f ON f.market=s.market AND f.symbol=s.symbol AND f.period=''
+                WHERE s.market='US' AND (f.updated IS NULL OR f.updated<=?)
+                ORDER BY coalesce(p.attempted,0), s.id LIMIT 1
+            """, (now - 86400,)).fetchone()
+        source = "US_history"
+        if selected and self.reserve(source, 60, 20, url=US_HISTORY):
+            symbol = selected["symbol"]
+            with self.store.connect() as db:
+                db.execute("INSERT OR REPLACE INTO poll_order VALUES ('US',?,?)", (symbol, now))
+            self.attempt(source, lambda: self.us_history(symbol, now), url=US_HISTORY)
+
+    def refresh_catalog(self, market, url):
+        content = self.fetch(url)
+        if market == "US":
+            self.store.replace_catalog(market, parse_catalog(content))
+        else:
+            catalog, prices = parse_daily_snapshot(market, content)
+            self.store.replace_catalog(market, catalog, prices)
+
+    def us_history(self, symbol, now):
+        params = {"function": "TIME_SERIES_DAILY", "symbol": symbol,
+                  "outputsize": "full" if self.us_full else "compact", "apikey": self.us_key}
+        points = parse_us_history(self.fetch(US_HISTORY + "?" + urlencode(params)))
+        with self.store.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            if not self.store.settings(db)["enabled"]:
+                return
+            self.store.save_prices(db, "US", ((symbol, *point) for point in points), "Alpha Vantage")
+            db.execute("INSERT OR REPLACE INTO fetches VALUES ('US',?,'',?)", (symbol, now))
+
+    def backfill_tw(self, now):
+        with self.store.connect() as db:
+            settings = self.store.settings(db)
+            if not settings["enabled"]:
+                return False
+            stock = db.execute("""
+                SELECT s.market,s.symbol FROM stocks AS s
+                WHERE s.market IN ('TWSE','TPEX') AND NOT EXISTS (
+                    SELECT 1 FROM fetches AS f WHERE f.market=s.market AND f.symbol=s.symbol
+                    AND f.period LIKE 'finmind:%' AND CAST(substr(f.period,9) AS INTEGER)>=?
+                    AND f.updated>?
+                )
+                ORDER BY coalesce((SELECT max(f.updated) FROM fetches AS f
+                    WHERE f.market=s.market AND f.symbol=s.symbol AND f.period LIKE 'finmind:%'),0),s.id
+                LIMIT 1
+            """, (settings["months"], now - 7 * 86400)).fetchone()
+        source = "FinMind_history"
+        if not stock or not self.reserve(source, 60, 12, url=FINMIND_HISTORY):
+            return False
+        self.attempt(source, lambda: self.refresh_tw_history(
+            stock["market"], stock["symbol"], settings["months"], now), url=FINMIND_HISTORY)
+        return True
+
+    def refresh_tw_history(self, market, symbol, months, now):
+        today = datetime.fromtimestamp(now, TAIPEI).date()
+        start, end = range_start(today, months).isoformat(), today.isoformat()
+        params = {"dataset": "TaiwanStockPrice", "data_id": symbol, "start_date": start, "end_date": end}
+        points = parse_finmind_history(self.fetch(FINMIND_HISTORY + "?" + urlencode(params)),
+                                       symbol, start, end)
+        with self.store.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            if not self.store.settings(db)["enabled"]:
+                return
+            self.store.save_prices(db, market, points, "FinMind")
             db.execute("INSERT OR REPLACE INTO fetches VALUES (?,?,?,?)",
-                       (market, symbol, period, now))
+                       (market, symbol, f"finmind:{months}", now))
 
     def run(self, stop):
         while not stop.is_set():

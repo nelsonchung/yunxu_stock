@@ -142,13 +142,15 @@ function render() {
   const visible = stocks.filter((stock) => categoryMatch(stock, filters.category) &&
     (!filters.market || stock.market === filters.market));
   byId("us-notice").hidden = state.us_configured || !visible.some(({ market }) => market === "US");
-  byId("view-summary").textContent = `${visible.length} 檔股票 · ${settings.months} 個月歷史收盤價`;
+  byId("view-summary").textContent = `${visible.length} 檔股票 · 顯示近 ${settings.months} 個月內已存的日線`;
   renderBoard(visible);
 }
 
 function renderBoard(visible) {
   const focus = filters.view === "focus";
   const board = byId("board");
+  const relatedFocus = document.activeElement?.dataset.relatedKey;
+  const technicalFocus = document.activeElement?.dataset.technicalKey;
   const { rows, columns } = state.settings;
   const perPage = rows * columns;
   const pages = Math.max(1, Math.ceil(visible.length / perPage));
@@ -172,8 +174,18 @@ function renderBoard(visible) {
   const display = focus ? visible.filter(({ id }) => String(id) === filters.focused) :
     visible.slice(filters.page * perPage, (filters.page + 1) * perPage);
   for (const chart of board.querySelectorAll("canvas")) chartObserver.unobserve(chart);
-  board.replaceChildren(...(display.length ? display.map(stockCard) : [emptyBoard()]));
+  const cards = display.length ? display.map(stockCard) : [emptyBoard()];
+  if (focus && display.length) cards.push(relatedCompanies(display[0]));
+  board.replaceChildren(...cards);
   for (const chart of board.querySelectorAll("canvas")) chartObserver.observe(chart);
+  if (relatedFocus) {
+    [...board.querySelectorAll("[data-related-key]")]
+      .find((control) => control.dataset.relatedKey === relatedFocus)?.focus({ preventScroll: true });
+  }
+  if (technicalFocus) {
+    [...board.querySelectorAll("[data-technical-key]")]
+      .find((control) => control.dataset.technicalKey === technicalFocus)?.focus({ preventScroll: true });
+  }
 }
 
 function emptyBoard() {
@@ -187,6 +199,56 @@ function emptyBoard() {
   return empty;
 }
 
+function focusStock(stock) {
+  if (filters.market && filters.market !== stock.market) filters.market = "";
+  if (!categoryMatch(stock, filters.category)) filters.category = "";
+  filters.focused = String(stock.id);
+  filters.view = "focus";
+  render();
+  byId("focused-stock").focus();
+}
+
+function relatedCompanies(stock) {
+  const section = element("section", "related-companies");
+  const heading = element("h2", "", "相關公司");
+  heading.id = "related-companies-title";
+  section.setAttribute("aria-labelledby", heading.id);
+  section.append(heading);
+
+  if (!stock.related?.length) {
+    section.append(element("p", "related-empty", "目前沒有相關公司資料"));
+    return section;
+  }
+
+  const list = element("ul", "related-list");
+  for (const company of stock.related) {
+    const { market, symbol, name, relationship } = company;
+    const tracked = state.stocks.find((item) => item.market === market && item.symbol === symbol);
+    const entry = element("li", "related-company");
+    const details = element("div", "related-details");
+    details.append(
+      element("p", "related-name", `${symbol} ${name}`),
+      element("p", "related-meta", `${marketNames[market]} · ${relationship}`),
+    );
+    const action = button("button button-quiet", tracked ? "查看" : "加入自選股", async () => {
+      if (tracked) {
+        focusStock(tracked);
+        return;
+      }
+      action.disabled = true;
+      const saved = await write({ action: "add_stock", market, symbol, category_id: stock.category_id },
+        byId("page-error"), `已加入 ${symbol} ${name}`);
+      if (!saved) action.disabled = false;
+    });
+    action.dataset.relatedKey = `${stock.id}:${market}:${symbol}`;
+    action.setAttribute("aria-label", tracked ? `查看 ${symbol} ${name}` : `將 ${symbol} ${name}加入自選股`);
+    entry.append(details, action);
+    list.append(entry);
+  }
+  section.append(list);
+  return section;
+}
+
 function stockCard(stock) {
   const card = element("article", "stock-card");
   const header = element("div", "card-head");
@@ -194,16 +256,18 @@ function stockCard(stock) {
   identity.append(element("h2", "ticker", stock.symbol), element("span", "market-tag", marketNames[stock.market]));
   header.append(identity);
   if (filters.view !== "focus") {
-    header.append(button("button button-quiet", "單股", () => {
-      filters.focused = String(stock.id);
-      filters.view = "focus";
-      render();
-      byId("focused-stock").focus();
-    }));
+    header.append(button("button button-quiet", "單股", () => focusStock(stock)));
   }
   card.append(header, element("p", "stock-name", stock.name));
   const latest = stock.history.at(-1);
-  if (latest) {
+  if (filters.view === "focus") {
+    card.append(StockTechnical.create(stock, state.settings.months));
+    if (latest) {
+      const first = stock.history[0][0];
+      const dateRange = first === latest[0] ? first : `${first} ～ ${latest[0]}`;
+      card.append(element("p", "history-coverage", `已載入 ${stock.history.length} 個交易日 · ${dateRange}`));
+    }
+  } else if (latest) {
     const quote = element("div", "quote");
     quote.append(
       element("span", "price", priceFormat.format(latest[1])),
@@ -247,7 +311,10 @@ function stockCard(stock) {
 
 const chartData = new WeakMap();
 const chartObserver = new ResizeObserver((entries) => {
-  for (const { target } of entries) drawChart(target);
+  for (const { target } of entries) {
+    if (target.classList.contains("technical-plot")) StockTechnical.redraw(target);
+    else drawChart(target);
+  }
 });
 
 function makeChart({ symbol, history }) {

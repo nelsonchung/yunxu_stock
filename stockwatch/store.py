@@ -6,6 +6,7 @@ import unicodedata
 
 MARKETS = ("TWSE", "TPEX", "US")
 MONTHS = (1, 3, 6, 12, 24)
+FOUNDRIES = (("TWSE", "2330"), ("TWSE", "2303"), ("TWSE", "6770"), ("TPEX", "5347"))
 
 
 def month_key(day, offset=0):
@@ -42,6 +43,10 @@ class Store:
                 CREATE TABLE IF NOT EXISTS catalog (
                     market TEXT, symbol TEXT, name TEXT, search_name TEXT,
                     PRIMARY KEY(market,symbol));
+                CREATE TABLE IF NOT EXISTS industries (
+                    market TEXT, symbol TEXT, code TEXT NOT NULL, paid_capital INTEGER NOT NULL,
+                    PRIMARY KEY(market,symbol));
+                CREATE INDEX IF NOT EXISTS industry_peers ON industries(code, paid_capital DESC);
                 CREATE TABLE IF NOT EXISTS stocks (
                     id INTEGER PRIMARY KEY AUTOINCREMENT, market TEXT NOT NULL,
                     symbol TEXT NOT NULL, name TEXT NOT NULL,
@@ -63,6 +68,12 @@ class Store:
                     source TEXT, attempted REAL);
                 CREATE INDEX IF NOT EXISTS request_window ON requests(source,attempted);
             """)
+            db.execute("BEGIN IMMEDIATE")
+            columns = {row["name"] for row in db.execute("PRAGMA table_info(prices)")}
+            for name, kind in (("open", "REAL"), ("high", "REAL"), ("low", "REAL"),
+                               ("volume", "INTEGER"), ("source", "TEXT")):
+                if name not in columns:
+                    db.execute(f"ALTER TABLE prices ADD COLUMN {name} {kind}")
 
     @contextmanager
     def connect(self):
@@ -95,13 +106,63 @@ class Store:
                 LIMIT 12
             """, (market, market, q, q, q, q, q))]
 
-    def replace_catalog(self, market, entries):
+    @staticmethod
+    def save_prices(db, market, points, source):
+        db.executemany("""
+            INSERT INTO prices(market,symbol,day,open,high,low,close,volume,source)
+            VALUES (?,?,?,?,?,?,?,?,?)
+            ON CONFLICT(market,symbol,day) DO UPDATE SET
+                open=excluded.open, high=excluded.high, low=excluded.low,
+                close=excluded.close, volume=excluded.volume, source=excluded.source
+            WHERE
+                (excluded.open IS NOT NULL OR prices.open IS NULL) AND
+                (excluded.source<>'FinMind' OR prices.source IS NULL OR prices.source='FinMind'
+                 OR prices.open IS NULL)
+        """, ((market, *point, source) for point in points))
+
+    def replace_catalog(self, market, entries, prices=()):
         with self.connect() as db:
             db.execute("DELETE FROM catalog WHERE market=?", (market,))
             db.executemany("INSERT INTO catalog VALUES (?,?,?,?)",
                            ((market, code, name, normalize(name)) for code, name in entries.items()))
+            if prices and self.settings(db)["enabled"]:
+                self.save_prices(db, market, prices, market)
 
-    def state(self, today, us_configured, us_full):
+    def replace_industries(self, market, entries):
+        with self.connect() as db:
+            db.execute("DELETE FROM industries WHERE market=?", (market,))
+            db.executemany("INSERT INTO industries VALUES (?,?,?,?)",
+                           ((market, *entry) for entry in entries))
+
+    @staticmethod
+    def related(db, key):
+        related = []
+        if key in FOUNDRIES:
+            for peer in FOUNDRIES:
+                if peer == key:
+                    continue
+                item = db.execute("SELECT market,symbol,name FROM catalog WHERE market=? AND symbol=?",
+                                  peer).fetchone()
+                if item:
+                    related.append(dict(item, relationship="晶圓代工同行"))
+
+        sector_peers = db.execute("""
+            SELECT c.market,c.symbol,c.name
+            FROM industries AS target
+            JOIN industries AS peer ON peer.code=target.code
+            JOIN catalog AS c ON c.market=peer.market AND c.symbol=peer.symbol
+            WHERE target.market=? AND target.symbol=?
+                AND target.code NOT IN ('00', '20', '80')
+                AND (peer.market<>target.market OR peer.symbol<>target.symbol)
+            ORDER BY peer.paid_capital DESC, c.market, c.symbol
+            LIMIT 8
+        """, key)
+        seen = {(item["market"], item["symbol"]) for item in related}
+        related.extend(dict(item, relationship="同產業") for item in sector_peers
+                       if (item["market"], item["symbol"]) not in seen)
+        return related[:8]
+
+    def state(self, today, us_configured, us_full, finmind_configured=False):
         with self.connect() as db:
             settings = self.settings(db)
             categories = [dict(row) for row in db.execute("SELECT id,name FROM categories ORDER BY id")]
@@ -109,30 +170,38 @@ class Store:
             stocks = []
             start = range_start(today, settings["months"])
             since = start.isoformat()
-            first_period = month_key(start)
             for row in db.execute("SELECT * FROM stocks ORDER BY id"):
                 s = dict(row)
                 key = (s["market"], s["symbol"])
-                s["history"] = [list(p) for p in db.execute(
-                    "SELECT day,close FROM prices WHERE market=? AND symbol=? AND day BETWEEN ? AND ? ORDER BY day",
-                    (*key, since, today.isoformat()))]
+                s["related"] = self.related(db, key)
+                prices = list(db.execute("""
+                    SELECT day,open,high,low,close,volume FROM prices
+                    WHERE market=? AND symbol=? AND day BETWEEN ? AND ? ORDER BY day
+                """, (*key, since, today.isoformat())))
+                s["history"] = [[p["day"], p["close"]] for p in prices]
+                s["candles"] = [list(p) for p in prices if all(value is not None for value in list(p)[1:])]
                 status = "等待背景更新"
-                if s["history"]:
-                    status = "日線已載入"
-                if settings["enabled"] and s["market"] != "US":
-                    count = db.execute("""SELECT count(*) FROM fetches
-                        WHERE market=? AND symbol=? AND period BETWEEN ? AND ?""",
-                        (*key, first_period, month_key(today))).fetchone()[0]
-                    expected = settings["months"] + 1
-                    if count < expected and s["history"]:
-                        status = f"歷史補齊中（{count}/{expected} 個月份）"
+                source = s["market"] + "_daily"
                 if s["market"] == "US":
+                    source = "US_history"
+                    if s["history"]:
+                        status = "日線已載入"
                     if not us_configured:
                         status = "美股行情需要 API 金鑰"
                     elif not us_full and settings["months"] > 3:
                         status = "目前方案最多最近 100 個交易日"
-                if errors.get(s["market"] + "_history") and settings["enabled"]:
-                    status = errors[s["market"] + "_history"]
+                elif s["history"]:
+                    status = "每日累積盤後日線"
+                if s["market"] != "US" and finmind_configured and settings["enabled"]:
+                    if errors.get("FinMind_history"):
+                        status = errors["FinMind_history"]
+                    elif not db.execute("""
+                        SELECT 1 FROM fetches WHERE market=? AND symbol=? AND period LIKE 'finmind:%'
+                        AND CAST(substr(period,9) AS INTEGER)>=?
+                    """, (*key, settings["months"])).fetchone():
+                        status = "等待補齊歷史 K 線"
+                if errors.get(source) and settings["enabled"]:
+                    status = errors[source]
                 if not settings["enabled"] and (s["market"] != "US" or us_configured):
                     status = "已暫停背景更新"
                 s["status"] = status
