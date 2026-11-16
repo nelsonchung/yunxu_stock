@@ -3,7 +3,7 @@
 globalThis.StockTechnical = (() => {
   const charts = new WeakMap();
   const intervals = [["daily", "日線"], ["weekly", "週線"], ["monthly", "月線"]];
-  const ranges = [[1, "1 個月"], [3, "3 個月"], [6, "6 個月"], [12, "12 個月"], [0, "全部"]];
+  const ranges = [[1, "1 個月"], [3, "3 個月"], [6, "6 個月"], [12, "12 個月"], [24, "24 個月"], [0, "全部"]];
   const averages = [
     [5, "#7451a5"], [10, "#af6114"], [20, "#235da3"], [60, "#087454"],
     [120, "#ab3864"], [240, "#596d27"],
@@ -17,7 +17,7 @@ globalThis.StockTechnical = (() => {
   const percent = new Intl.NumberFormat("zh-TW", {
     maximumFractionDigits: 2, minimumFractionDigits: 2, signDisplay: "exceptZero",
   });
-  const preferences = { period: "daily", months: 0, averagePeriods: new Set([5, 10, 20, 60]) };
+  const preferences = { period: "daily", months: null, averagePeriods: new Set([5, 10, 20, 60]) };
   const day = (value) => new Date(`${value}T00:00:00Z`);
 
   function cutoff(latest, months) {
@@ -156,7 +156,8 @@ globalThis.StockTechnical = (() => {
       });
       return [key, control];
     });
-    const rangeControls = ranges.filter(([months]) => months < maxMonths).map(([months, label]) => {
+    const canDisplayRange = (months) => months === 0 || maxMonths === 0 || months < maxMonths;
+    const rangeControls = ranges.filter(([months]) => canDisplayRange(months)).map(([months, label]) => {
       const control = chartControl(label, `range-${months}`, () => {
         preferences.months = months;
         updateSeries();
@@ -184,7 +185,8 @@ globalThis.StockTechnical = (() => {
 
     function updateSeries() {
       const calculated = StockIndicators.buildSeries(stock.history, stock.candles ?? [], preferences.period);
-      const range = preferences.months < maxMonths ? preferences.months : 0;
+      const preferred = preferences.months ?? (maxMonths === 0 ? 12 : 0);
+      const range = canDisplayRange(preferred) ? preferred : 0;
       bars = calculated;
       previous = null;
       if (range && calculated.length) {
@@ -335,10 +337,11 @@ globalThis.StockTechnical = (() => {
       ctx.fillText(label, right + 5, y(value) + 3);
     }
     const timeTicks = Math.min(bars.length, Math.max(2, Math.floor((right - left) / 105)));
+    const showYears = day(bars.at(-1).date) - day(bars[0].date) > 366 * 86400000;
     ctx.fillStyle = colors.axis;
     for (let tick = 0; tick < timeTicks; tick += 1) {
       const i = timeTicks === 1 ? 0 : Math.round(tick * (bars.length - 1) / (timeTicks - 1));
-      const label = bars[i].date.slice(5).replace("-", "/");
+      const label = (showYears ? bars[i].date.slice(0, 7) : bars[i].date.slice(5)).replace("-", "/");
       const labelWidth = ctx.measureText(label).width;
       if (showDates) {
         ctx.fillText(label, Math.max(left, Math.min(right - labelWidth, x(i) - labelWidth / 2)), height - 5);

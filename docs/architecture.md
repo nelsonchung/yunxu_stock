@@ -37,7 +37,7 @@
 | `move_stock` | `id`、`category_id`，傳 `null` 移回未分類 |
 | `add_category` | `name` |
 | `remove_category` | `id`，原分類內的股票移回未分類 |
-| `settings` | `months` 為 1、3、6、12 或 24，`rows`、`columns` 各為 1 至 6，`enabled` 為布林值 |
+| `settings` | `months` 為 0（全部）或 1、3、6、12、24，`rows`、`columns` 各為 1 至 6，`enabled` 為布林值 |
 
 服務使用 HTTP，部署在可信任的區域網路。這是一份共用清單，網路內可觸及站點的使用者能修改同一份資料。伺服器檢查允許的 `Host`，也檢查帶有 `Origin` 的寫入請求是否來自同一來源。
 

@@ -12,7 +12,10 @@ from urllib.request import Request, urlopen
 
 from stockwatch.server import make_server
 from stockwatch.store import Store, range_start
-from stockwatch.worker import CATALOG, FINMIND_HISTORY, INDUSTRIES, US_HISTORY, ProviderError, TAIPEI, Worker, download, parse_daily_snapshot, parse_us_history
+from stockwatch.worker import (
+    CATALOG, FINMIND_HISTORY, INDUSTRIES, US_HISTORY, ProviderError, TAIPEI, Worker,
+    daily_snapshot_delay, download, parse_daily_snapshot, parse_us_history,
+)
 
 
 class StockWatchTests(unittest.TestCase):
@@ -100,11 +103,49 @@ class StockWatchTests(unittest.TestCase):
         self.settings(True)
         worker.tick()
         self.assertEqual(calls, [CATALOG["TWSE"]])
-        self.now += 86400
+        self.now = datetime(2026, 11, 16, 18, 15, tzinfo=TAIPEI).timestamp()
         worker.tick()
         points = self.store.state(date(2026, 11, 15), False, False)["stocks"][0]["history"]
         self.assertEqual(points, [["2026-10-20", 1000], ["2026-11-13", 1234.5]])
         self.assertEqual(range_start(date(2026, 3, 31), 1), date(2026, 2, 28))
+
+    def test_daily_snapshot_checks_after_close_without_polling_weekends(self):
+        def next_check(day, hour, minute, latest):
+            now = datetime(2026, 11, day, hour, minute, tzinfo=TAIPEI).timestamp()
+            return datetime.fromtimestamp(now + daily_snapshot_delay(now, latest), TAIPEI)
+
+        def at(day, hour, minute):
+            return datetime(2026, 11, day, hour, minute, tzinfo=TAIPEI)
+
+        self.assertEqual(next_check(16, 14, 55, "2026-11-13"), at(16, 18, 15))
+        self.assertEqual(next_check(16, 18, 15, "2026-11-13"), at(16, 20, 30))
+        self.assertEqual(next_check(16, 20, 30, "2026-11-13"), at(17, 18, 15))
+        self.assertEqual(next_check(16, 18, 15, "2026-11-16"), at(17, 18, 15))
+        self.assertEqual(next_check(20, 18, 15, "2026-11-20"), at(23, 18, 15))
+
+    def test_full_history_reaches_provider_start_and_refreshes_only_recent_dates(self):
+        self.store.action({"action": "add_stock", "market": "TWSE", "symbol": "2330"})
+        self.store.action({"action": "settings", "months": 0, "enabled": True, "rows": 2, "columns": 2})
+        calls = []
+
+        def fetch(url):
+            calls.append(url)
+            rows = [{"date": day, "stock_id": "2330", "open": 200, "max": 220,
+                     "min": 190, "close": 210, "Trading_Volume": 12345}
+                    for day in ("1994-10-01", "2026-10-27", "2026-11-13")]
+            return json.dumps({"status": 200, "data": rows})
+
+        worker = Worker(self.store, fetch, lambda: self.now)
+        with self.store.connect() as db:
+            db.execute("INSERT INTO fetches VALUES ('TWSE','2330','finmind:24',?)", (self.now,))
+        self.assertTrue(worker.backfill_tw(self.now))
+        self.assertIn("start_date=1994-10-01", calls[-1])
+        self.assertFalse(worker.backfill_tw(self.now))
+        self.now += 7 * 86400
+        self.assertTrue(worker.backfill_tw(self.now))
+        self.assertIn("start_date=2026-11-08", calls[-1])
+        stock = self.store.state(date(2026, 11, 22), False, False, True)["stocks"][0]
+        self.assertEqual([bar[0] for bar in stock["candles"]], ["1994-10-01", "2026-10-27", "2026-11-13"])
 
     def test_rolling_budget_and_backoff_persist_across_restarts(self):
         worker = Worker(self.store, now=lambda: self.now)

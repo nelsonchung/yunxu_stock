@@ -6,7 +6,7 @@ import math
 import os
 import re
 import time
-from datetime import date, datetime
+from datetime import date, datetime, time as clock_time, timedelta
 from email.utils import parsedate_to_datetime
 from urllib.error import HTTPError
 from urllib.parse import urlencode, urlsplit
@@ -28,6 +28,10 @@ INDUSTRIES = {
 }
 US_HISTORY = "https://www.alphavantage.co/query"
 FINMIND_HISTORY = "https://api.finmindtrade.com/api/v4/data"
+FINMIND_FIRST_DAY = date(1994, 10, 1)
+FINMIND_RECHECK_DAYS = 7
+TW_CLOSE_CHECK = clock_time(18, 15)
+TW_LATE_CHECK = clock_time(20, 30)
 QUERY_ENDPOINTS = {US_HISTORY, FINMIND_HISTORY}
 ALLOWED_ENDPOINTS = {*CATALOG.values(), *INDUSTRIES.values(), *QUERY_ENDPOINTS}
 
@@ -51,6 +55,20 @@ def retry_after(value):
             return max(0, parsedate_to_datetime(value).timestamp() - time.time())
         except (ValueError, TypeError, OverflowError):
             return 0
+
+
+def daily_snapshot_delay(now, latest_day):
+    current = datetime.fromtimestamp(now, TAIPEI)
+    today = current.date()
+    if today.weekday() < 5 and latest_day < today.isoformat():
+        for slot in (TW_CLOSE_CHECK, TW_LATE_CHECK):
+            candidate = datetime.combine(today, slot, TAIPEI)
+            if candidate > current:
+                return candidate.timestamp() - now
+    next_day = today + timedelta(days=1)
+    while next_day.weekday() >= 5:
+        next_day += timedelta(days=1)
+    return datetime.combine(next_day, TW_CLOSE_CHECK, TAIPEI).timestamp() - now
 
 
 def download(url):
@@ -231,13 +249,13 @@ class Worker:
 
     def attempt(self, source, work, *, url, success_interval=0):
         try:
-            work()
+            scheduled_delay = work()
         except ProviderError as exc:
             self.result(source, exc, url=url)
         except (ValueError, KeyError, IndexError, TypeError, AttributeError):
             self.result(source, ProviderError("行情來源回應格式異常，稍後重試"))
         else:
-            self.result(source, success_interval=success_interval)
+            self.result(source, success_interval=success_interval if scheduled_delay is None else scheduled_delay)
 
     def tick(self):
         now = self.now()
@@ -280,9 +298,10 @@ class Worker:
         content = self.fetch(url)
         if market == "US":
             self.store.replace_catalog(market, parse_catalog(content))
-        else:
-            catalog, prices = parse_daily_snapshot(market, content)
-            self.store.replace_catalog(market, catalog, prices)
+            return None
+        catalog, prices = parse_daily_snapshot(market, content)
+        self.store.replace_catalog(market, catalog, prices)
+        return daily_snapshot_delay(self.now(), max((point[1] for point in prices), default=""))
 
     def us_history(self, symbol, now):
         params = {"function": "TIME_SERIES_DAILY", "symbol": symbol,
@@ -300,27 +319,28 @@ class Worker:
             settings = self.store.settings(db)
             if not settings["enabled"]:
                 return False
-            stock = db.execute("""
-                SELECT s.market,s.symbol FROM stocks AS s
-                WHERE s.market IN ('TWSE','TPEX') AND NOT EXISTS (
-                    SELECT 1 FROM fetches AS f WHERE f.market=s.market AND f.symbol=s.symbol
-                    AND f.period LIKE 'finmind:%' AND CAST(substr(f.period,9) AS INTEGER)>=?
-                    AND f.updated>?
-                )
-                ORDER BY coalesce((SELECT max(f.updated) FROM fetches AS f
-                    WHERE f.market=s.market AND f.symbol=s.symbol AND f.period LIKE 'finmind:%'),0),s.id
-                LIMIT 1
-            """, (settings["months"], now - 7 * 86400)).fetchone()
+            months = settings["months"]
+            coverage = self.store.finmind_coverage(db, months)
+            stocks = [tuple(row) for row in db.execute(
+                "SELECT market,symbol FROM stocks WHERE market IN ('TWSE','TPEX') ORDER BY id")]
+        stock = min(stocks, key=lambda key: coverage.get(key, 0), default=None)
+        checked_at = coverage.get(stock)
+        if checked_at is not None and now - checked_at < FINMIND_RECHECK_DAYS * 86400:
+            return False
         source = "FinMind_history"
         if not stock or not self.reserve(source, 60, 12, url=FINMIND_HISTORY):
             return False
         self.attempt(source, lambda: self.refresh_tw_history(
-            stock["market"], stock["symbol"], settings["months"], now), url=FINMIND_HISTORY)
+            *stock, months, now, checked_at), url=FINMIND_HISTORY)
         return True
 
-    def refresh_tw_history(self, market, symbol, months, now):
+    def refresh_tw_history(self, market, symbol, months, now, checked_at=None):
         today = datetime.fromtimestamp(now, TAIPEI).date()
-        start, end = range_start(today, months).isoformat(), today.isoformat()
+        earliest = range_start(today, months) if months else FINMIND_FIRST_DAY
+        if checked_at is not None:
+            overlap = datetime.fromtimestamp(checked_at, TAIPEI).date() - timedelta(days=FINMIND_RECHECK_DAYS)
+            earliest = max(earliest, overlap)
+        start, end = earliest.isoformat(), today.isoformat()
         params = {"dataset": "TaiwanStockPrice", "data_id": symbol, "start_date": start, "end_date": end}
         points = parse_finmind_history(self.fetch(FINMIND_HISTORY + "?" + urlencode(params)),
                                        symbol, start, end)
@@ -330,7 +350,7 @@ class Worker:
                 return
             self.store.save_prices(db, market, points, "FinMind")
             db.execute("INSERT OR REPLACE INTO fetches VALUES (?,?,?,?)",
-                       (market, symbol, f"finmind:{months}", now))
+                       (market, symbol, f"finmind:{months}" if months else "finmind:all", now))
 
     def run(self, stop):
         while not stop.is_set():

@@ -5,7 +5,7 @@ from datetime import date
 import unicodedata
 
 MARKETS = ("TWSE", "TPEX", "US")
-MONTHS = (1, 3, 6, 12, 24)
+MONTHS = (0, 1, 3, 6, 12, 24)
 FOUNDRIES = (("TWSE", "2330"), ("TWSE", "2303"), ("TWSE", "6770"), ("TPEX", "5347"))
 
 
@@ -92,6 +92,17 @@ class Store:
         row["enabled"] = bool(row["enabled"])
         return row
 
+    @staticmethod
+    def finmind_coverage(db, months):
+        rows = db.execute("""
+            SELECT market,symbol,max(updated) AS updated FROM fetches
+            WHERE period='finmind:all' OR (
+                ?>0 AND period LIKE 'finmind:%' AND CAST(substr(period,9) AS INTEGER)>=?
+            )
+            GROUP BY market,symbol
+        """, (months, months))
+        return {(row["market"], row["symbol"]): row["updated"] for row in rows}
+
     def search(self, q, market):
         q = normalize(q)
         if not q or len(q) > 80 or market not in ("", *MARKETS):
@@ -168,8 +179,9 @@ class Store:
             categories = [dict(row) for row in db.execute("SELECT id,name FROM categories ORDER BY id")]
             errors = {r["name"]: r["error"] for r in db.execute("SELECT name,error FROM sources")}
             stocks = []
-            start = range_start(today, settings["months"])
-            since = start.isoformat()
+            months = settings["months"]
+            since = (range_start(today, months) if months else date.min).isoformat()
+            coverage = self.finmind_coverage(db, months) if finmind_configured else {}
             for row in db.execute("SELECT * FROM stocks ORDER BY id"):
                 s = dict(row)
                 key = (s["market"], s["symbol"])
@@ -188,17 +200,14 @@ class Store:
                         status = "日線已載入"
                     if not us_configured:
                         status = "美股行情需要 API 金鑰"
-                    elif not us_full and settings["months"] > 3:
+                    elif not us_full and (months == 0 or months > 3):
                         status = "目前方案最多最近 100 個交易日"
                 elif s["history"]:
                     status = "每日累積盤後日線"
                 if s["market"] != "US" and finmind_configured and settings["enabled"]:
                     if errors.get("FinMind_history"):
                         status = errors["FinMind_history"]
-                    elif not db.execute("""
-                        SELECT 1 FROM fetches WHERE market=? AND symbol=? AND period LIKE 'finmind:%'
-                        AND CAST(substr(period,9) AS INTEGER)>=?
-                    """, (*key, settings["months"])).fetchone():
+                    elif key not in coverage:
                         status = "等待補齊歷史 K 線"
                 if errors.get(source) and settings["enabled"]:
                     status = errors[source]
@@ -222,9 +231,11 @@ class Store:
             db.execute("BEGIN IMMEDIATE")
             action = data.get("action")
             if action == "settings":
-                months, rows, columns = (integer(key) for key in ("months", "rows", "columns"))
+                months = data.get("months")
+                rows, columns = (integer(key) for key in ("rows", "columns"))
                 enabled = data.get("enabled")
-                if months not in MONTHS or rows > 6 or columns > 6 or type(enabled) is not bool:
+                if (type(months) is not int or months not in MONTHS
+                        or rows > 6 or columns > 6 or type(enabled) is not bool):
                     raise InputError("請選擇有效的歷史區間與看板格數")
                 db.execute("UPDATE settings SET months=?, enabled=?, rows=?, columns=?",
                            (months, enabled, rows, columns))

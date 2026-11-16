@@ -7,7 +7,16 @@ const priceFormat = new Intl.NumberFormat("zh-TW", {
   minimumFractionDigits: 2,
   maximumFractionDigits: 2,
 });
+const changeFormat = new Intl.NumberFormat("zh-TW", {
+  minimumFractionDigits: 2,
+  maximumFractionDigits: 2,
+  signDisplay: "exceptZero",
+});
+const volumeFormat = new Intl.NumberFormat("zh-TW");
+const quoteDateFormats = ["Asia/Taipei", "America/New_York"].map((timeZone) =>
+  new Intl.DateTimeFormat("zh-TW", { year: "numeric", month: "2-digit", day: "2-digit", timeZone }));
 let state;
+let quoteDates = [];
 let revision = 0;
 let pendingWrites = 0;
 let loadPending = false;
@@ -45,6 +54,15 @@ function announce(message) {
   byId("announcement").textContent = message;
 }
 
+function currentQuoteDates() {
+  const now = new Date();
+  return quoteDateFormats.map((formatter) => {
+    const { year, month, day } = Object.fromEntries(
+      formatter.formatToParts(now).map(({ type, value }) => [type, value]));
+    return `${year}-${month}-${day}`;
+  });
+}
+
 async function loadState({ quiet = false } = {}) {
   if (quiet && (loadPending || pendingWrites || document.hidden || document.querySelector("dialog[open]") ||
     document.activeElement?.matches("#board select"))) return;
@@ -53,8 +71,11 @@ async function loadState({ quiet = false } = {}) {
   try {
     const next = await request("/api/state");
     if (version !== revision) return;
-    if (!quiet || JSON.stringify(next) !== JSON.stringify(state)) {
+    const dates = currentQuoteDates();
+    if (!quiet || dates.some((date, index) => date !== quoteDates[index]) ||
+        JSON.stringify(next) !== JSON.stringify(state)) {
       state = next;
+      quoteDates = dates;
       render();
     }
     showError(byId("page-error"), null);
@@ -142,7 +163,11 @@ function render() {
   const visible = stocks.filter((stock) => categoryMatch(stock, filters.category) &&
     (!filters.market || stock.market === filters.market));
   byId("us-notice").hidden = state.us_configured || !visible.some(({ market }) => market === "US");
-  byId("view-summary").textContent = `${visible.length} 檔股票 · 顯示近 ${settings.months} 個月內已存的日線`;
+  const historySummary = settings.months === 0
+    ? "顯示全部已存日線"
+    : `顯示近 ${settings.months} 個月內已存的日線`;
+  const summary = filters.view === "focus" ? historySummary : "盤後行情，非盤中即時報價";
+  byId("view-summary").textContent = `${visible.length} 檔股票 · ${summary}`;
   renderBoard(visible);
 }
 
@@ -249,6 +274,49 @@ function relatedCompanies(stock) {
   return section;
 }
 
+function latestSession(stock, latest) {
+  if (!latest) return element("p", "session-empty", "等待盤後行情");
+
+  const [date, close] = latest;
+  const isToday = date === quoteDates[stock.market === "US" ? 1 : 0];
+  const summary = element("section", "session-summary");
+  const heading = element("div", "session-heading", isToday ? "今日交易日" : "最新交易日");
+  const tradingDay = element("time", "quote-date", date);
+  tradingDay.dateTime = date;
+  heading.append(tradingDay);
+
+  const quote = element("div", "quote");
+  const previousClose = stock.history.at(-2)?.[1];
+  const change = previousClose > 0 ? close - previousClose : null;
+  const quoteChange = element("span", "quote-change", change === null
+    ? "漲跌 —" : `${changeFormat.format(change)} (${changeFormat.format(change / previousClose * 100)}%)`);
+  quoteChange.title = "相較前一交易日收盤";
+  if (change) {
+    const useRed = stock.market === "US" ? change < 0 : change > 0;
+    quoteChange.classList.add(useRed ? "market-red" : "market-green");
+  }
+  quote.append(element("span", "currency", "收盤"),
+    element("span", "price", priceFormat.format(close)),
+    element("span", "currency", stock.market === "US" ? "USD" : "TWD"), quoteChange);
+
+  const lastCandle = stock.candles?.at(-1);
+  const candle = lastCandle?.[0] === date ? lastCandle : [];
+  const details = element("dl", "session-metrics");
+  for (const [key, label, value] of [
+    ["open", "開盤", candle[1]], ["high", "最高", candle[2]], ["low", "最低", candle[3]], ["volume", "成交量", candle[5]],
+  ]) {
+    const item = element("div", `session-${key}`);
+    let display = "—";
+    if (Number.isFinite(value)) {
+      display = key === "volume" ? `${volumeFormat.format(value)} 股` : priceFormat.format(value);
+    }
+    item.append(element("dt", "", label), element("dd", "", display));
+    details.append(item);
+  }
+  summary.append(heading, quote, details);
+  return summary;
+}
+
 function stockCard(stock) {
   const card = element("article", "stock-card");
   const header = element("div", "card-head");
@@ -267,21 +335,8 @@ function stockCard(stock) {
       const dateRange = first === latest[0] ? first : `${first} ～ ${latest[0]}`;
       card.append(element("p", "history-coverage", `已載入 ${stock.history.length} 個交易日 · ${dateRange}`));
     }
-  } else if (latest) {
-    const quote = element("div", "quote");
-    quote.append(
-      element("span", "price", priceFormat.format(latest[1])),
-      element("span", "currency", stock.market === "US" ? "USD" : "TWD"),
-      element("time", "quote-date", latest[0]),
-    );
-    quote.lastChild.dateTime = latest[0];
-    card.append(quote, makeChart(stock));
   } else {
-    const quote = element("div", "quote");
-    const dash = element("span", "price", "—");
-    dash.setAttribute("aria-hidden", "true");
-    quote.append(dash);
-    card.append(quote, element("p", "chart-empty", "沒有歷史收盤價"));
+    card.append(latestSession(stock, latest));
   }
   if (stock.status) card.append(element("p", "card-status", stock.status));
   const actions = element("div", "card-actions");
@@ -309,91 +364,9 @@ function stockCard(stock) {
   return card;
 }
 
-const chartData = new WeakMap();
 const chartObserver = new ResizeObserver((entries) => {
-  for (const { target } of entries) {
-    if (target.classList.contains("technical-plot")) StockTechnical.redraw(target);
-    else drawChart(target);
-  }
+  for (const { target } of entries) StockTechnical.redraw(target);
 });
-
-function makeChart({ symbol, history }) {
-  const chart = element("canvas", "chart");
-  chart.setAttribute("role", "img");
-  chart.setAttribute("aria-label", `${symbol} 歷史收盤價圖，自 ${history[0][0]} 至 ${history.at(-1)[0]}`);
-  chartData.set(chart, history);
-  return chart;
-}
-
-function drawChart(canvas) {
-  const history = chartData.get(canvas);
-  const { width, height } = canvas.getBoundingClientRect();
-  if (!width || !height) return;
-  const pixelRatio = window.devicePixelRatio || 1;
-  canvas.width = Math.round(width * pixelRatio);
-  canvas.height = Math.round(height * pixelRatio);
-  const context = canvas.getContext("2d");
-  context.scale(pixelRatio, pixelRatio);
-  const values = history.map(([, close]) => close);
-  const min = Math.min(...values);
-  const max = Math.max(...values);
-  const inset = Math.max((max - min) * .08, max * .001, .01);
-  const bottom = height - 19;
-  context.font = "10px system-ui, sans-serif";
-  const left = Math.min(width * .46, Math.max(context.measureText(priceFormat.format(max + inset)).width + 7, 28));
-  const end = width - 6;
-  const timeOrigin = Date.parse(history[0][0]);
-  const duration = Date.parse(history.at(-1)[0]) - timeOrigin;
-  const points = history.map(([date, close]) => [
-    duration ? left + ((Date.parse(date) - timeOrigin) / duration) * (end - left) : (left + end) / 2,
-    8 + ((max + inset - close) / (max - min + 2 * inset)) * (bottom - 8),
-  ]);
-
-  context.fillStyle = "#566c63";
-  for (let tick = 0; tick <= 2; tick += 1) {
-    const y = 8 + (bottom - 8) * tick / 2;
-    context.strokeStyle = "#e1ebe4";
-    context.beginPath();
-    context.moveTo(left, y);
-    context.lineTo(end, y);
-    context.stroke();
-    context.fillText(priceFormat.format(max + inset - (max - min + 2 * inset) * tick / 2), 0, y + 3, left - 5);
-  }
-  const firstDate = history[0][0];
-  const lastDate = history.at(-1)[0];
-  context.fillText(firstDate, left, height - 3);
-  if (duration && end - left > 132) {
-    context.textAlign = "right";
-    context.fillText(lastDate, end, height - 3);
-  }
-
-  const gradient = context.createLinearGradient(0, 7, 0, bottom);
-  gradient.addColorStop(0, "#55b98e66");
-  gradient.addColorStop(1, "#55b98e08");
-  const [startX, startY] = points[0];
-  const [endX] = points.at(-1);
-  context.beginPath();
-  context.moveTo(startX, startY);
-  for (const [x, y] of points.slice(1)) context.lineTo(x, y);
-  context.lineTo(endX, bottom);
-  context.lineTo(startX, bottom);
-  context.closePath();
-  context.fillStyle = gradient;
-  context.fill();
-
-  context.beginPath();
-  context.moveTo(startX, startY);
-  for (const [x, y] of points.slice(1)) context.lineTo(x, y);
-  context.strokeStyle = "#087454";
-  context.lineWidth = 1.7;
-  context.lineJoin = "round";
-  context.stroke();
-  const [x, y] = points.at(-1);
-  context.beginPath();
-  context.arc(x, y, 3, 0, Math.PI * 2);
-  context.fillStyle = "#087454";
-  context.fill();
-}
 
 const stockDialog = byId("stock-dialog");
 const search = byId("stock-search");
