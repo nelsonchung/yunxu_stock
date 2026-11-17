@@ -13,6 +13,7 @@
 | 證券櫃檯買賣中心（TPEx） | `www.tpex.org.tw/openapi/v1/tpex_mainboard_quotes` | 上櫃名錄與每日收盤價。[櫃買中心 OpenAPI](https://www.tpex.org.tw/openapi/) · [上櫃股票收盤行情資料集](https://data.gov.tw/dataset/11371) |
 | 證券櫃檯買賣中心（TPEx） | `www.tpex.org.tw/openapi/v1/mopsfin_t187ap03_O` | 上櫃公司產業別與實收資本額。實際連線主機是櫃買中心。[櫃買中心 OpenAPI](https://www.tpex.org.tw/openapi/) · [上櫃公司基本資料集](https://data.gov.tw/dataset/25036) |
 | FinMind | `api.finmindtrade.com/api/v4/data` | 台股 `TaiwanStockPrice`，依自選股票與設定期間補開高低收及成交量。需明確設為個人非商業使用。[資料集](https://finmind.github.io/tutor/TaiwanMarket/Technical/) · [方案用途](https://finmind.github.io/Pricing/) · [使用條款](https://finmind.github.io/PrivacyPolicy/) |
+| 永豐金證券 Shioaji | 指定埠的 `127.0.0.1` 本機 Shioaji 服務，僅使用行情訂閱與 SSE | 台股盤中整股成交與五檔委託。透過券商授權的訂閱服務接收，盤中走勢由收到的成交推播彙整。[即時證券行情](https://sinotrade.github.io/zh/tutor/market_data/streaming/stocks/) · [合理使用規範](https://sinotrade.github.io/zh/tutor/limit/) |
 | Nasdaq Trader | `www.nasdaqtrader.com/dynamic/SymDir/nasdaqtraded.txt` | 美股名錄，本專案用於自選股的內部非商業查詢。[Nasdaq Trader 名錄用途與下載](https://www.nasdaqtrader.com/trader.aspx?id=symbollookup) · [Nasdaq Trader 公告列出的名錄檔案](https://www.nasdaqtrader.com/TraderNews.aspx?id=ETA2026-64) |
 | Alpha Vantage | `www.alphavantage.co/query` | 美股 `TIME_SERIES_DAILY`，需 API 金鑰。使用期間與次數依實際方案。[日線 API 文件](https://www.alphavantage.co/documentation/#daily) · [服務條款](https://www.alphavantage.co/terms_of_service/) · [API 額度說明](https://www.alphavantage.co/support/api-key/) |
 
@@ -28,12 +29,13 @@
 
 | 規則 | 目前行為 |
 | --- | --- |
-| 執行方式 | 單一背景執行緒。所有對外請求的開始時間至少相隔 5 秒，同一更新工作最短間隔 60 秒。 |
+| 執行方式 | 對外 HTTP 資料更新採單一背景執行緒，請求開始至少相隔 5 秒，同一更新工作最短間隔 60 秒。Shioaji 行情由本機 SSE 接收。 |
 | 台股日線和名錄 | 每市場共用同一批 OpenAPI 資料。平日於台北時間 18:15 查詢，若來源仍只有較早交易日便於 20:30 再查一次。這是程式排程，實際發布時間由來源決定。每個市場滾動 24 小時最多 3 次嘗試。 |
 | 台股產業資料 | 成功後等待 7 天，滾動 24 小時最多 3 次嘗試。 |
 | 美股名錄 | 成功後等待 24 小時，滾動 24 小時最多 3 次嘗試。 |
 | 美股日線 | 有金鑰才請求，本程式滾動 24 小時最多 20 次。應把同一金鑰在其他程式用掉的次數也計入供應商整體額度。 |
 | FinMind 台股歷史日線 | 啟用後每次查一檔自選股票。選「全部」時從官方資料集起始日 1994-10-01 查詢，各股以來源有資料的日期為準。首次追蹤或擴大期間會排入更新，之後每七天只重新查詢近期未涵蓋的日期並重疊七天。本程式滾動 24 小時最多 12 次。 |
+| Shioaji 台股盤中行情 | 設定本機來源後，平日台北時間 09:00–13:35 依網格需求訂閱已追蹤的台股，每次最多追蹤 36 檔，畫面離開後需求約 60 秒到期。資料暫存在記憶體，分時走勢從收到成交推播開始累積。盤中整股成交量與盤後日資料統計口徑可能不同。 |
 | HTTP 403 或 429 | 來源與其同一主機上的請求至少冷卻 24 小時。若回應的 `Retry-After` 要求更久，採較長時間。 |
 | 其他錯誤 | 依連續失敗次數延長等待。回應設有讀取逾時與大小上限，失敗時保留已存資料。 |
 
@@ -41,7 +43,7 @@
 
 ## 暫停與端點維護
 
-看板設定中的停用開關會暫停台股盤後行情寫入、FinMind 補歷史，以及 Alpha Vantage 日線請求。名錄與產業資料照各自排程更新。若需完全停止本程式的對外請求，請停止服務。
+看板設定中的停用開關會暫停台股盤中行情、盤後行情寫入、FinMind 補歷史，以及 Alpha Vantage 日線請求。名錄與產業資料照各自排程更新。若需完全停止本程式的對外請求，請停止服務。
 
 ```sh
 sudo systemctl stop yunxu-stock

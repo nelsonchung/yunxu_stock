@@ -122,9 +122,19 @@ globalThis.StockIndicators = (() => {
     });
   }
 
-  function buildSeries(history = [], candles = [], period = "daily") {
+  function buildSeries(history = [], candles = [], period = "daily", dateRange) {
     if (!["daily", "weekly", "monthly"].includes(period)) throw new RangeError("Unsupported period");
-    const bars = aggregate(dailyBars(history, candles), period);
+    let daily = dailyBars(history, candles);
+    if (dateRange) {
+      const { start, end } = dateRange;
+      if (!validDate(start) || !validDate(end) || start > end) throw new RangeError("Invalid date range");
+      const firstPeriod = period === "daily" ? null : periodKey(start, period);
+      // Keep earlier periods for indicator history, but use only the selected days
+      // in the first and last visible weekly or monthly candle.
+      daily = daily.filter(({ date }) => date <= end && (firstPeriod === null ||
+        date >= start || periodKey(date, period) < firstPeriod));
+    }
+    const bars = aggregate(daily, period);
     const closes = bars.map(({ close }) => close);
     const averages = MA_PERIODS.map((length) => movingAverage(closes, length));
     const kd = stochastic(bars);

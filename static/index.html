@@ -7,6 +7,7 @@
   <link rel="stylesheet" href="/style.css">
   <script src="/indicators.js" defer></script>
   <script src="/technical.js" defer></script>
+  <script src="/intraday.js" defer></script>
   <script src="/app.js" defer></script>
 </head>
 <body>
@@ -49,6 +50,7 @@
         <label class="focus-picker" id="focus-picker" hidden>股票 <select id="focused-stock"></select></label>
         <button class="button button-quiet layout-button" id="open-layout" type="button">排列設定</button>
       </div>
+      <p class="intraday-notice" id="intraday-notice" hidden></p>
       <p class="notice" id="page-error" role="alert" hidden></p>
       <p class="sr-only" id="announcement" role="status" aria-live="polite"></p>
       <div id="board" class="board" aria-label="自選股行情"></div>

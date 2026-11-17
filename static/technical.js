@@ -17,7 +17,10 @@ globalThis.StockTechnical = (() => {
   const percent = new Intl.NumberFormat("zh-TW", {
     maximumFractionDigits: 2, minimumFractionDigits: 2, signDisplay: "exceptZero",
   });
-  const preferences = { period: "daily", months: null, averagePeriods: new Set([5, 10, 20, 60]) };
+  const preferences = {
+    period: "daily", months: null, dates: null, dateDraft: null, dateOpen: false,
+    averagePeriods: new Set([5, 10, 20, 60]),
+  };
   const day = (value) => new Date(`${value}T00:00:00Z`);
 
   function cutoff(latest, months) {
@@ -160,13 +163,62 @@ globalThis.StockTechnical = (() => {
     const rangeControls = ranges.filter(([months]) => canDisplayRange(months)).map(([months, label]) => {
       const control = chartControl(label, `range-${months}`, () => {
         preferences.months = months;
+        preferences.dates = null;
+        preferences.dateDraft = null;
+        preferences.dateOpen = false;
         updateSeries();
       });
       return [months, control];
     });
+    const dateForm = element("form", "technical-date-form");
+    dateForm.id = "technical-date-form";
+    const dateError = element("p", "technical-date-error");
+    dateError.setAttribute("role", "alert");
+    dateError.hidden = true;
+    const dateFields = {};
+    for (const [key, label] of [["start", "起始日期"], ["end", "結束日期"]]) {
+      const field = element("label", "technical-date-field", label);
+      const input = element("input");
+      input.type = "date";
+      input.required = true;
+      input.min = "0001-01-01";
+      input.max = "9999-12-31";
+      input.name = key;
+      input.dataset.technicalKey = `date-${key}`;
+      input.addEventListener("input", () => {
+        preferences.dateDraft = { start: dateFields.start.value, end: dateFields.end.value };
+        dateError.hidden = true;
+      });
+      dateFields[key] = input;
+      field.append(input);
+      dateForm.append(field);
+    }
+    const applyDates = element("button", "button button-primary", "套用日期");
+    applyDates.type = "submit";
+    applyDates.dataset.technicalKey = "date-apply";
+    dateForm.append(applyDates, dateError);
+    dateForm.addEventListener("submit", (event) => {
+      event.preventDefault();
+      const start = dateFields.start.value, end = dateFields.end.value;
+      if (start > end) {
+        dateError.textContent = "起始日期須早於或等於結束日期。";
+        dateError.hidden = false;
+        return;
+      }
+      dateError.hidden = true;
+      preferences.dates = { start, end };
+      preferences.dateDraft = preferences.dates;
+      updateSeries();
+    });
+    const dateControl = chartControl("自訂日期", "range-custom", () => {
+      preferences.dateOpen = !preferences.dateOpen;
+      renderDateForm();
+      if (preferences.dateOpen) dateFields.start.focus();
+    });
+    dateControl.setAttribute("aria-controls", dateForm.id);
     intervalGroup.append(...intervalControls.map(([, control]) => control));
-    rangeGroup.append(...rangeControls.map(([, control]) => control));
-    section.append(title, toolbar, metrics, graphs, help, live);
+    rangeGroup.append(...rangeControls.map(([, control]) => control), dateControl);
+    section.append(title, toolbar, dateForm, metrics, graphs, help, live);
 
     function selectAt(event, canvas) {
       const rect = canvas.getBoundingClientRect();
@@ -184,18 +236,17 @@ globalThis.StockTechnical = (() => {
     }
 
     function updateSeries() {
-      const calculated = StockIndicators.buildSeries(stock.history, stock.candles ?? [], preferences.period);
+      const dates = preferences.dates;
+      const calculated = StockIndicators.buildSeries(stock.history, stock.candles ?? [], preferences.period, dates);
       const preferred = preferences.months ?? (maxMonths === 0 ? 12 : 0);
       const range = canDisplayRange(preferred) ? preferred : 0;
       bars = calculated;
       previous = null;
-      if (range && calculated.length) {
-        const firstDate = cutoff(calculated.at(-1).date, range);
+      if (dates || (range && calculated.length)) {
+        const firstDate = dates ? dates.start : cutoff(calculated.at(-1).date, range);
         const first = calculated.findIndex((bar) => bar.date >= firstDate);
-        if (first > 0) {
-          bars = calculated.slice(first);
-          previous = calculated[first - 1];
-        }
+        bars = first < 0 ? [] : calculated.slice(first);
+        previous = first > 0 ? calculated[first - 1] : null;
       }
       index = bars.length - 1;
       const available = {
@@ -217,11 +268,24 @@ globalThis.StockTechnical = (() => {
         control.setAttribute("aria-pressed", String(preferences.period === key));
       }
       for (const [months, control] of rangeControls) {
-        control.setAttribute("aria-pressed", String(range === months));
+        control.setAttribute("aria-pressed", String(!dates && range === months));
       }
-      rangeGroup.hidden = rangeControls.length < 2;
+      renderDateForm();
       renderSelection();
       redrawPanels();
+    }
+
+    function renderDateForm() {
+      dateForm.hidden = !preferences.dateOpen;
+      dateControl.setAttribute("aria-expanded", String(preferences.dateOpen));
+      dateControl.setAttribute("aria-pressed", String(Boolean(preferences.dates)));
+      if (!preferences.dateOpen) return;
+      const dates = preferences.dateDraft ?? {
+        start: bars[0]?.startDate ?? "",
+        end: bars.at(-1)?.date ?? "",
+      };
+      dateFields.start.value = dates.start;
+      dateFields.end.value = dates.end;
     }
 
     function renderSelection() {

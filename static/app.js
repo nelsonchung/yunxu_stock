@@ -20,6 +20,9 @@ let quoteDates = [];
 let revision = 0;
 let pendingWrites = 0;
 let loadPending = false;
+let intradayIds = "";
+let intradayData = null;
+let intradayRequest = null;
 
 function element(tag, className, label) {
   const node = document.createElement(tag);
@@ -65,7 +68,7 @@ function currentQuoteDates() {
 
 async function loadState({ quiet = false } = {}) {
   if (quiet && (loadPending || pendingWrites || document.hidden || document.querySelector("dialog[open]") ||
-    document.activeElement?.matches("#board select"))) return;
+    document.activeElement?.matches("#board select, #technical-date-form input"))) return;
   const version = ++revision;
   loadPending = true;
   try {
@@ -166,7 +169,9 @@ function render() {
   const historySummary = settings.months === 0
     ? "顯示全部已存日線"
     : `顯示近 ${settings.months} 個月內已存的日線`;
-  const summary = filters.view === "focus" ? historySummary : "盤後行情，非盤中即時報價";
+  const summary = filters.view === "focus" ? historySummary :
+    (intradayData?.configured && intradayData.session && visible.some(({ market }) => market !== "US")
+      ? "台股盤中整股行情" : "最新交易日行情");
   byId("view-summary").textContent = `${visible.length} 檔股票 · ${summary}`;
   renderBoard(visible);
 }
@@ -203,6 +208,15 @@ function renderBoard(visible) {
   if (focus && display.length) cards.push(relatedCompanies(display[0]));
   board.replaceChildren(...cards);
   for (const chart of board.querySelectorAll("canvas")) chartObserver.observe(chart);
+  const ids = focus ? "" : display.filter(({ market }) => market !== "US").map(({ id }) => id).join(",");
+  if (ids !== intradayIds) {
+    intradayIds = ids;
+    intradayData = null;
+    intradayRequest?.abort();
+    intradayRequest = null;
+    void refreshIntraday();
+  }
+  renderIntraday();
   if (relatedFocus) {
     [...board.querySelectorAll("[data-related-key]")]
       .find((control) => control.dataset.relatedKey === relatedFocus)?.focus({ preventScroll: true });
@@ -210,6 +224,57 @@ function renderBoard(visible) {
   if (technicalFocus) {
     [...board.querySelectorAll("[data-technical-key]")]
       .find((control) => control.dataset.technicalKey === technicalFocus)?.focus({ preventScroll: true });
+  }
+}
+
+function renderIntraday() {
+  const notice = byId("intraday-notice");
+  const show = Boolean(intradayIds && intradayData);
+  notice.hidden = !show || !intradayData.status ||
+    (intradayData.session && intradayData.status === "台股盤中整股行情");
+  if (show) notice.textContent = intradayData.status;
+  if (!show) return;
+  for (const section of byId("board").querySelectorAll("[data-intraday-id]")) {
+    const id = section.dataset.intradayId;
+    const stock = state.stocks.find((item) => String(item.id) === id);
+    const quote = intradayData.quotes?.[id];
+    const isCurrent = quote && quote.date === quoteDates[0];
+    const stale = isCurrent && Date.now() / 1000 - quote.fetched_at > 90;
+    const signature = isCurrent ? JSON.stringify([quote, intradayData.session, stale]) : "";
+    if (section.dataset.quote === signature) continue;
+    section.dataset.quote = signature;
+    const previous = section.querySelector("details");
+    const hadFocus = previous?.querySelector("summary") === document.activeElement;
+    for (const canvas of section.querySelectorAll("canvas")) chartObserver.unobserve(canvas);
+    section.replaceChildren(isCurrent
+      ? StockIntraday.create(stock, quote, intradayData.session, previous?.open ?? true)
+      : latestSession(stock, stock.history.at(-1)));
+    for (const canvas of section.querySelectorAll("canvas")) chartObserver.observe(canvas);
+    if (hadFocus) section.querySelector("summary")?.focus({ preventScroll: true });
+  }
+}
+
+async function refreshIntraday() {
+  if (!intradayIds || document.hidden || intradayRequest) return;
+  const controller = new AbortController();
+  intradayRequest = controller;
+  try {
+    const result = await request(`/api/intraday?ids=${encodeURIComponent(intradayIds)}`, { signal: controller.signal });
+    if (intradayRequest !== controller) return;
+    intradayData = result;
+  } catch (error) {
+    if (intradayRequest !== controller) return;
+    intradayData = { configured: false, session: false, status: "盤中行情暫時無法讀取 · 顯示最近盤後資料" };
+  } finally {
+    if (intradayRequest === controller) {
+      intradayRequest = null;
+      renderIntraday();
+      const summary = intradayData?.configured && intradayData.session
+        ? "台股盤中整股行情" : "最新交易日行情";
+      const viewSummary = byId("view-summary");
+      const previous = viewSummary.textContent.split(" · ", 1)[0];
+      viewSummary.textContent = `${previous} · ${summary}`;
+    }
   }
 }
 
@@ -336,7 +401,11 @@ function stockCard(stock) {
       card.append(element("p", "history-coverage", `已載入 ${stock.history.length} 個交易日 · ${dateRange}`));
     }
   } else {
-    card.append(latestSession(stock, latest));
+    const section = element("div");
+    if (stock.market !== "US") section.dataset.intradayId = stock.id;
+    section.dataset.quote = "";
+    section.append(latestSession(stock, latest));
+    card.append(section);
   }
   if (stock.status) card.append(element("p", "card-status", stock.status));
   const actions = element("div", "card-actions");
@@ -365,7 +434,10 @@ function stockCard(stock) {
 }
 
 const chartObserver = new ResizeObserver((entries) => {
-  for (const { target } of entries) StockTechnical.redraw(target);
+  for (const { target } of entries) {
+    if (target.classList.contains("intraday-plot")) StockIntraday.redraw(target);
+    else StockTechnical.redraw(target);
+  }
 });
 
 const stockDialog = byId("stock-dialog");
@@ -608,7 +680,11 @@ byId("open-stock").addEventListener("click", openStockDialog);
 byId("open-settings").addEventListener("click", openSettings);
 byId("open-layout").addEventListener("click", openSettings);
 document.addEventListener("visibilitychange", () => {
-  if (!document.hidden) void loadState({ quiet: true });
+  if (!document.hidden) {
+    void loadState({ quiet: true });
+    void refreshIntraday();
+  }
 });
 void loadState();
 window.setInterval(() => void loadState({ quiet: true }), 20000);
+window.setInterval(() => void refreshIntraday(), 12000);

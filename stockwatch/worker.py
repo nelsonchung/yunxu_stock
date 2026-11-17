@@ -13,6 +13,7 @@ from urllib.parse import urlencode, urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 from zoneinfo import ZoneInfo
 
+from .intraday import Intraday, configured_port
 from .store import range_start
 
 LOG = logging.getLogger(__name__)
@@ -202,11 +203,12 @@ def parse_finmind_history(content, symbol, start, end):
 
 
 class Worker:
-    def __init__(self, store, fetch=download, now=time.time):
+    def __init__(self, store, fetch=download, now=time.time, *, offline=False):
         self.store, self.fetch, self.now = store, fetch, now
         self.us_key = os.environ.get("ALPHA_VANTAGE_API_KEY", "").strip()
         self.us_full = os.environ.get("ALPHA_VANTAGE_FULL") == "1"
         self.finmind_history = os.environ.get("FINMIND_HISTORY") == "1"
+        self.intraday = Intraday(store, now, None if offline else configured_port())
 
     def reserve(self, source, interval, ceiling, *, url=None):
         now = self.now()
@@ -353,9 +355,13 @@ class Worker:
                        (market, symbol, f"finmind:{months}" if months else "finmind:all", now))
 
     def run(self, stop):
-        while not stop.is_set():
-            try:
-                self.tick()
-            except Exception as exc:
-                LOG.error("Background update failed: %s", type(exc).__name__)
-            stop.wait(5)
+        try:
+            while not stop.is_set():
+                try:
+                    self.intraday.sync()
+                    self.tick()
+                except Exception as exc:
+                    LOG.error("Background update failed: %s", type(exc).__name__)
+                stop.wait(5)
+        finally:
+            self.intraday.close()

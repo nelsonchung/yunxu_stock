@@ -76,3 +76,18 @@ test("KD seeds from 50 and resets its nine-bar window across close-only gaps", (
   assert.equal(last.d, 50);
   assert.equal(last.volume, 0);
 });
+
+test("Custom dates clip weekly and monthly candles but retain indicator history", () => {
+  const candles = Array.from({ length: 46 }, (_, i) => [day(i), i + 10, i + 12, i + 9, i + 11, 10]);
+  const range = { start: "2025-02-04", end: "2025-02-05" };
+  const daily = buildSeries([], candles, "daily", range);
+  assert.equal(daily.at(-1).date, range.end);
+  assert.equal(daily.at(-2).ma[5], 43);
+  for (const period of ["weekly", "monthly"]) {
+    const series = buildSeries([], candles, period, range);
+    const last = series.at(-1);
+    assert.deepEqual([last.startDate, last.date, last.open, last.high, last.low, last.close, last.volume],
+                     [range.start, range.end, 44, 47, 43, 46, 20]);
+    assert.ok(series.at(-2).date < range.start);
+  }
+});

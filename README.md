@@ -4,7 +4,7 @@
 
 這是一份供區域網路使用的共用清單，設定與股票儲存在 `state/stocks.sqlite3`。請勿把這個服務對外開放；服務沒有個別帳號。備份請使用 SQLite backup 指令或在停服務後複製資料庫。
 
-網格以最新可用交易日為主，標明資料日期並顯示開高低收、漲跌與成交量。單股頁提供歷史走勢與台股相關公司。清單優先顯示已整理的晶圓代工同行，再依交易所產業分類提供同產業公司。可直接加入自選，或切換到已追蹤的公司。
+網格顯示最新可用交易日的開高低收、漲跌與成交量。連接永豐金證券 Shioaji 行情服務後，可在交易時段查看台股盤中報價。單股頁可透過「自訂日期」查看指定區間的走勢與指標，也可直接加入或切換到同產業公司。
 
 ## 資料來源與更新規則
 
@@ -12,6 +12,16 @@
 
 - [資料來源與使用規則](docs/data-sources.md)
 - [系統架構與維運](docs/architecture.md)
+
+## 啟用台股盤中行情
+
+先在永豐金證券理財網的「個人服務 → API 管理」申請 Shioaji 行情金鑰。依官方說明在樹莓派啟動 Shioaji 本機服務，確認它只監聽 `127.0.0.1` 且使用正式行情。金鑰與密鑰保存在 Shioaji 自己的設定中。看板只使用行情訂閱。[金鑰申請](https://sinotrade.github.io/zh/tutor/prepare/token/) · [本機服務設定](https://sinotrade.github.io/zh/env_setup/other/)
+
+在樹莓派執行 `sudoedit /etc/yunxu-stock.env`，加入本機 Shioaji 的實際埠號，儲存後執行 `sudo systemctl restart yunxu-stock`。以下用 8091 示意，可選未被其他服務佔用的埠。
+
+```ini
+SHIOAJI_PORT=8091
+```
 
 ## 啟用美股日線
 

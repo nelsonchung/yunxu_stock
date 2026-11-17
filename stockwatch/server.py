@@ -1,6 +1,7 @@
 import argparse
 import json
 import logging
+import re
 import signal
 import threading
 from datetime import datetime
@@ -9,6 +10,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
+from .intraday import MAX_IDS
 from .store import InputError, Store
 from .worker import TAIPEI, Worker
 
@@ -18,6 +20,7 @@ ASSETS = {
     "/app.js": ("app.js", "text/javascript; charset=utf-8"),
     "/indicators.js": ("indicators.js", "text/javascript; charset=utf-8"),
     "/technical.js": ("technical.js", "text/javascript; charset=utf-8"),
+    "/intraday.js": ("intraday.js", "text/javascript; charset=utf-8"),
     "/style.css": ("style.css", "text/css; charset=utf-8"),
 }
 
@@ -70,6 +73,22 @@ class Handler(BaseHTTPRequestHandler):
                 return
             self.json(HTTPStatus.OK, {"results": self.server.store.search(
                 fields.get("q", [""])[0], fields.get("market", [""])[0])})
+        elif target.path == "/api/intraday":
+            origin = self.headers.get("Origin")
+            if (origin and origin != "http://" + self.headers["Host"]) or (
+                    self.headers.get("Sec-Fetch-Site") not in (None, "none", "same-origin")):
+                self.json(HTTPStatus.FORBIDDEN, {"error": "不允許跨網站操作"})
+                return
+            try:
+                fields = parse_qs(target.query, max_num_fields=2)
+                ids = fields.get("ids", [""])[0].split(",") if fields.get("ids") else []
+                if len(ids) > MAX_IDS or any(not re.fullmatch(r"[0-9]{1,19}", item)
+                                               or not 1 <= int(item) < 2**63 for item in ids):
+                    raise ValueError("Invalid IDs")
+            except ValueError:
+                self.json(HTTPStatus.BAD_REQUEST, {"error": "行情查詢的股票選擇無效"})
+                return
+            self.json(HTTPStatus.OK, self.server.worker.intraday.snapshot(list(dict.fromkeys(map(int, ids)))))
         elif target.path == "/healthz":
             with self.server.store.connect() as db:
                 db.execute("SELECT 1 FROM settings").fetchone()
@@ -107,7 +126,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def log_message(self, fmt, *args):
         if getattr(self, "command", None) != "GET" or not getattr(self, "path", "").startswith(
-                ("/api/state", "/api/search")):
+                ("/api/state", "/api/search", "/api/intraday")):
             super().log_message(fmt, *args)
 
 
@@ -131,7 +150,7 @@ def main():
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     args.db.parent.mkdir(parents=True, exist_ok=True)
     store = Store(args.db)
-    worker = Worker(store)
+    worker = Worker(store, offline=args.offline)
     stop = threading.Event()
     with make_server(args.bind, args.port, store, worker) as server:
         for signum in (signal.SIGINT, signal.SIGTERM):
