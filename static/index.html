@@ -16,7 +16,11 @@
       <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
       <span>鋆旭觀測站<span class="brand-divider"></span><span class="brand-subtitle">自選股</span></span>
     </a>
-    <button class="button button-quiet" id="open-settings" type="button">設定</button>
+    <nav aria-label="觀測站功能">
+      <a class="button button-quiet" href="http://127.0.0.1:8094/accounting"
+         style="display:inline-flex;align-items:center;color:inherit;text-decoration:none">帳務</a>
+      <button class="button button-quiet" id="open-settings" type="button">設定</button>
+    </nav>
   </header>
   <div class="workspace">
     <aside class="sidebar" aria-label="篩選自選股">
@@ -49,6 +53,10 @@
         </div>
         <label class="focus-picker" id="focus-picker" hidden>股票 <select id="focused-stock"></select></label>
         <button class="button button-quiet layout-button" id="open-layout" type="button">排列設定</button>
+      </div>
+      <div id="focus-detail-controls" class="view-controls focus-detail-controls" role="group" aria-label="單股資訊" hidden>
+        <button id="focus-quote" aria-pressed="true" type="button">當日行情</button>
+        <button id="focus-technical" aria-pressed="false" type="button">技術線圖</button>
       </div>
       <p class="intraday-notice" id="intraday-notice" hidden></p>
       <p class="notice" id="page-error" role="alert" hidden></p>

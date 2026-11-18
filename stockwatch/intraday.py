@@ -9,6 +9,7 @@ import socket
 import threading
 from dataclasses import dataclass, field
 from datetime import datetime, time
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 TAIPEI = ZoneInfo("Asia/Taipei")
@@ -26,6 +27,16 @@ SYMBOL = re.compile(r"[0-9]{4,6}[A-Z]{0,2}")
 def configured_port():
     value = os.environ.get("SHIOAJI_PORT", "").strip()
     return int(value) if re.fullmatch(r"[0-9]{1,5}", value) and 1 <= int(value) <= 65535 else None
+
+
+def configured_http_token():
+    directory = os.environ.get("CREDENTIALS_DIRECTORY")
+    if directory:
+        try:
+            return (Path(directory) / "shioaji-http-token").read_text().strip()
+        except FileNotFoundError:
+            pass
+    return None
 
 
 def trading_time(now):
@@ -147,8 +158,9 @@ def stream_events(response):
 
 
 class Intraday:
-    def __init__(self, store, now, port):
+    def __init__(self, store, now, port, http_token=None):
         self.store, self.now, self.port = store, now, port
+        self.auth_headers = {"Authorization": f"Bearer {http_token}"} if http_token else {}
         self.lock = threading.Lock()
         self.demand = {}
         self.quotes = {}
@@ -271,7 +283,7 @@ class Intraday:
         connection = http.client.HTTPConnection("127.0.0.1", self.port, timeout=2)
         try:
             connection.request("POST", f"/api/v1/stream/{action}", body,
-                               {"Content-Type": "application/json"})
+                               self.auth_headers | {"Content-Type": "application/json"})
             with connection.getresponse() as response:
                 if not 200 <= response.status < 300:
                     raise OSError("Shioaji subscription rejected")
@@ -281,7 +293,7 @@ class Intraday:
     def server_mode(self):
         connection = http.client.HTTPConnection("127.0.0.1", self.port, timeout=3)
         try:
-            connection.request("GET", "/api/v1/info")
+            connection.request("GET", "/api/v1/info", headers=self.auth_headers)
             with connection.getresponse() as response:
                 if response.status != 200:
                     return None
@@ -300,7 +312,7 @@ class Intraday:
                 return
             if cancel.is_set():
                 return
-            connection.request("GET", STREAM_PATH, headers={"Accept": "text/event-stream"})
+            connection.request("GET", STREAM_PATH, headers=self.auth_headers | {"Accept": "text/event-stream"})
             stream_socket = connection.sock
             with self.lock:
                 if self.stopping or cancel.is_set():

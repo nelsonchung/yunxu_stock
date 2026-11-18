@@ -2,7 +2,7 @@
 
 const byId = (id) => document.getElementById(id);
 const marketNames = { TWSE: "台股上市", TPEX: "台股上櫃", US: "美股" };
-const filters = { market: "", category: "", view: "grid", focused: "", page: 0 };
+const filters = { market: "", category: "", view: "grid", focusPanel: "quote", focused: "", page: 0 };
 const priceFormat = new Intl.NumberFormat("zh-TW", {
   minimumFractionDigits: 2,
   maximumFractionDigits: 2,
@@ -23,6 +23,7 @@ let loadPending = false;
 let intradayIds = "";
 let intradayData = null;
 let intradayRequest = null;
+let visibleStockCount = 0;
 
 function element(tag, className, label) {
   const node = document.createElement(tag);
@@ -166,14 +167,24 @@ function render() {
   const visible = stocks.filter((stock) => categoryMatch(stock, filters.category) &&
     (!filters.market || stock.market === filters.market));
   byId("us-notice").hidden = state.us_configured || !visible.some(({ market }) => market === "US");
-  const historySummary = settings.months === 0
-    ? "顯示全部已存日線"
-    : `顯示近 ${settings.months} 個月內已存的日線`;
-  const summary = filters.view === "focus" ? historySummary :
-    (intradayData?.configured && intradayData.session && visible.some(({ market }) => market !== "US")
-      ? "台股盤中整股行情" : "最新交易日行情");
-  byId("view-summary").textContent = `${visible.length} 檔股票 · ${summary}`;
+  visibleStockCount = visible.length;
   renderBoard(visible);
+  renderViewSummary();
+}
+
+function showingTechnical() {
+  return filters.view === "focus" && filters.focusPanel === "technical";
+}
+
+function renderViewSummary() {
+  const months = state.settings.months;
+  const historySummary = months === 0
+    ? "顯示全部已存日線"
+    : `顯示近 ${months} 個月內已存的日線`;
+  const summary = showingTechnical() ? historySummary :
+    (intradayIds && intradayData?.configured && intradayData.session
+      ? "台股盤中整股行情" : "最新交易日行情");
+  byId("view-summary").textContent = `${visibleStockCount} 檔股票 · ${summary}`;
 }
 
 function renderBoard(visible) {
@@ -191,6 +202,9 @@ function renderBoard(visible) {
   byId("grid-view").setAttribute("aria-pressed", String(!focus));
   byId("focus-view").setAttribute("aria-pressed", String(focus));
   byId("focus-picker").hidden = !focus || !visible.length;
+  byId("focus-detail-controls").hidden = !focus || !visible.length;
+  byId("focus-quote").setAttribute("aria-pressed", String(!showingTechnical()));
+  byId("focus-technical").setAttribute("aria-pressed", String(showingTechnical()));
   byId("open-layout").hidden = focus;
   if (focus) setOptions(byId("focused-stock"), visible.map(({ id, symbol, name }) => ({
     value: id, label: `${symbol} ${name}`,
@@ -208,7 +222,7 @@ function renderBoard(visible) {
   if (focus && display.length) cards.push(relatedCompanies(display[0]));
   board.replaceChildren(...cards);
   for (const chart of board.querySelectorAll("canvas")) chartObserver.observe(chart);
-  const ids = focus ? "" : display.filter(({ market }) => market !== "US").map(({ id }) => id).join(",");
+  const ids = showingTechnical() ? "" : display.filter(({ market }) => market !== "US").map(({ id }) => id).join(",");
   if (ids !== intradayIds) {
     intradayIds = ids;
     intradayData = null;
@@ -232,7 +246,9 @@ function renderIntraday() {
   const show = Boolean(intradayIds && intradayData);
   notice.hidden = !show || !intradayData.status ||
     (intradayData.session && intradayData.status === "台股盤中整股行情");
-  if (show) notice.textContent = intradayData.status;
+  if (show) notice.textContent = intradayData.configured === false
+    ? "盤中行情尚未接入，顯示最近盤後資料"
+    : intradayData.status;
   if (!show) return;
   for (const section of byId("board").querySelectorAll("[data-intraday-id]")) {
     const id = section.dataset.intradayId;
@@ -264,16 +280,12 @@ async function refreshIntraday() {
     intradayData = result;
   } catch (error) {
     if (intradayRequest !== controller) return;
-    intradayData = { configured: false, session: false, status: "盤中行情暫時無法讀取 · 顯示最近盤後資料" };
+    intradayData = { configured: null, session: false, status: "盤中行情暫時無法讀取 · 顯示最近盤後資料" };
   } finally {
     if (intradayRequest === controller) {
       intradayRequest = null;
       renderIntraday();
-      const summary = intradayData?.configured && intradayData.session
-        ? "台股盤中整股行情" : "最新交易日行情";
-      const viewSummary = byId("view-summary");
-      const previous = viewSummary.textContent.split(" · ", 1)[0];
-      viewSummary.textContent = `${previous} · ${summary}`;
+      renderViewSummary();
     }
   }
 }
@@ -294,6 +306,7 @@ function focusStock(stock) {
   if (!categoryMatch(stock, filters.category)) filters.category = "";
   filters.focused = String(stock.id);
   filters.view = "focus";
+  filters.focusPanel = "quote";
   render();
   byId("focused-stock").focus();
 }
@@ -345,7 +358,9 @@ function latestSession(stock, latest) {
   const [date, close] = latest;
   const isToday = date === quoteDates[stock.market === "US" ? 1 : 0];
   const summary = element("section", "session-summary");
-  const heading = element("div", "session-heading", isToday ? "今日交易日" : "最新交易日");
+  const taiwan = stock.market !== "US";
+  const sessionLabel = isToday ? "今日交易日" : "最新交易日";
+  const heading = element("div", "session-heading", taiwan ? `${sessionLabel}・盤後` : sessionLabel);
   const tradingDay = element("time", "quote-date", date);
   tradingDay.dateTime = date;
   heading.append(tradingDay);
@@ -367,9 +382,11 @@ function latestSession(stock, latest) {
   const lastCandle = stock.candles?.at(-1);
   const candle = lastCandle?.[0] === date ? lastCandle : [];
   const details = element("dl", "session-metrics");
-  for (const [key, label, value] of [
+  const metrics = [
     ["open", "開盤", candle[1]], ["high", "最高", candle[2]], ["low", "最低", candle[3]], ["volume", "成交量", candle[5]],
-  ]) {
+  ];
+  if (taiwan) metrics.unshift(["previous-close", "前收", previousClose]);
+  for (const [key, label, value] of metrics) {
     const item = element("div", `session-${key}`);
     let display = "—";
     if (Number.isFinite(value)) {
@@ -378,7 +395,19 @@ function latestSession(stock, latest) {
     item.append(element("dt", "", label), element("dd", "", display));
     details.append(item);
   }
-  summary.append(heading, quote, details);
+  summary.append(heading, quote);
+  if (taiwan) {
+    summary.classList.add("daily-grid-summary");
+    const layout = element("div", "intraday-layout");
+    const graph = element("div", "intraday-unavailable");
+    graph.append(element("strong", "", "盤中分時走勢"), element("span", "", "尚無盤中價量資料"));
+    const report = element("div");
+    report.append(details, element("p", "daily-depth-empty", "最佳五檔 · 尚無委託資料"));
+    layout.append(graph, report);
+    summary.append(layout);
+  } else {
+    summary.append(details);
+  }
   return summary;
 }
 
@@ -393,7 +422,7 @@ function stockCard(stock) {
   }
   card.append(header, element("p", "stock-name", stock.name));
   const latest = stock.history.at(-1);
-  if (filters.view === "focus") {
+  if (showingTechnical()) {
     card.append(StockTechnical.create(stock, state.settings.months));
     if (latest) {
       const first = stock.history[0][0];
@@ -661,7 +690,15 @@ for (const closeButton of document.querySelectorAll("[data-close]")) {
 for (const [view, id] of [["grid", "grid-view"], ["focus", "focus-view"]]) {
   byId(id).addEventListener("click", () => {
     if (!state) return;
+    if (view === "focus" && filters.view !== "focus") filters.focusPanel = "quote";
     filters.view = view;
+    render();
+  });
+}
+for (const [panel, id] of [["quote", "focus-quote"], ["technical", "focus-technical"]]) {
+  byId(id).addEventListener("click", () => {
+    if (!state || filters.view !== "focus" || filters.focusPanel === panel) return;
+    filters.focusPanel = panel;
     render();
   });
 }

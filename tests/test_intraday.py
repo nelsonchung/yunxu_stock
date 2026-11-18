@@ -73,12 +73,16 @@ class IntradayTests(unittest.TestCase):
         entered_stream = threading.Event()
         finish_stream = threading.Event()
         actions = []
+        token = "fixture-key:fixture-secret"
 
         class FakeDaemon(BaseHTTPRequestHandler):
             def log_message(self, *args):
                 pass
 
             def do_GET(self):
+                if self.headers.get("Authorization") != f"Bearer {token}":
+                    self.send_error(401)
+                    return
                 actions.append(("GET", self.path))
                 if self.path == "/api/v1/info":
                     payload = json.dumps({"name": "Shioaji API Server", "simulation": simulation}).encode()
@@ -98,6 +102,9 @@ class IntradayTests(unittest.TestCase):
                     self.send_error(404)
 
             def do_POST(self):
+                if self.headers.get("Authorization") != f"Bearer {token}":
+                    self.send_error(401)
+                    return
                 body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
                 actions.append(("POST", self.path, body))
                 self.send_response(200)
@@ -107,7 +114,7 @@ class IntradayTests(unittest.TestCase):
         with ThreadingHTTPServer(("127.0.0.1", 0), FakeDaemon) as server:
             thread = threading.Thread(target=server.serve_forever, daemon=True)
             thread.start()
-            intraday = Intraday(self.store, lambda: self.now, server.server_port)
+            intraday = Intraday(self.store, lambda: self.now, server.server_port, token)
             try:
                 intraday.snapshot([1])
                 intraday.sync()

@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="zh-Hant-TW">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <title>帳務｜鋆旭觀測站</title>
+  <link rel="stylesheet" href="/style.css">
+  <link rel="stylesheet" href="/accounting.css">
+  <script src="/accounting.js" defer></script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
+      <span>鋆旭觀測站</span>
+    </div>
+    <a class="button button-quiet accounting-back" href="http://192.168.8.235:8090/">返回自選股</a>
+  </header>
+  <main class="content accounting-content">
+    <div class="page-heading">
+      <div>
+        <h1>證券帳務</h1>
+        <p class="summary" id="accounting-status" role="status">正在查詢永豐證券帳務…</p>
+      </div>
+      <button class="button button-primary" type="button" id="refresh-accounting">重新查詢</button>
+    </div>
+    <div class="accounting-summary" aria-label="帳務摘要">
+      <section class="accounting-card" aria-labelledby="balance-title">
+        <h2 id="balance-title">交割帳戶餘額</h2>
+        <p class="accounting-value" id="accounting-balance">—</p>
+        <p class="accounting-meta" id="accounting-balance-date" hidden></p>
+        <p class="accounting-error" id="accounting-balance-error" hidden></p>
+      </section>
+      <section class="accounting-card" aria-labelledby="pnl-title">
+        <h2 id="pnl-title">未實現損益</h2>
+        <p class="accounting-value" id="accounting-pnl">—</p>
+        <p class="accounting-meta">合計依永豐證券回傳的庫存損益</p>
+      </section>
+    </div>
+    <section class="accounting-card accounting-holdings" aria-labelledby="positions-title">
+      <div class="accounting-section-heading">
+        <h2 id="positions-title">證券庫存</h2>
+        <span class="accounting-meta" id="accounting-count" hidden></span>
+      </div>
+      <p class="accounting-empty" id="accounting-positions-status">正在查詢庫存…</p>
+      <table class="accounting-table" id="accounting-table" aria-labelledby="positions-title" hidden>
+        <thead>
+          <tr>
+            <th scope="col">股票代號</th>
+            <th scope="col">方向</th>
+            <th scope="col">庫存股數</th>
+            <th scope="col">均價</th>
+            <th scope="col">最新價</th>
+            <th scope="col">未實現損益</th>
+          </tr>
+        </thead>
+        <tbody id="accounting-positions"></tbody>
+      </table>
+    </section>
+  </main>
+</body>
+</html>

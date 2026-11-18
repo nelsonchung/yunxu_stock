@@ -1,0 +1,134 @@
+.accounting-back {
+  display: inline-flex;
+  align-items: center;
+  color: var(--ink);
+  text-decoration: none;
+}
+.accounting-content {
+  max-width: 1140px;
+  margin-inline: auto;
+}
+.accounting-summary {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  margin-block: 24px 16px;
+}
+.accounting-card {
+  min-width: 0;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 13px;
+  padding: 18px;
+}
+.accounting-card h2 {
+  font-size: 16px;
+  font-weight: 750;
+}
+.accounting-value {
+  margin-top: 6px;
+  font-size: clamp(24px, 3.5vw, 34px);
+  font-weight: 750;
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+}
+.accounting-value, .accounting-table {
+  font-variant-numeric: tabular-nums;
+}
+.accounting-gain { color: var(--gain); }
+.accounting-loss { color: var(--loss); }
+.accounting-meta, .accounting-empty {
+  color: var(--secondary);
+  font-size: 13px;
+}
+.accounting-card p.accounting-meta,
+.accounting-error { margin-top: 6px; }
+.accounting-error {
+  color: #674918;
+  font-size: 13px;
+}
+.accounting-section-heading {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: center;
+  gap: 6px 12px;
+  margin-bottom: 12px;
+}
+.accounting-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+.accounting-table th,
+.accounting-table td {
+  text-align: right;
+  padding: 10px 8px;
+  overflow-wrap: anywhere;
+}
+.accounting-table th {
+  color: var(--secondary);
+  border-bottom: 1px solid var(--line);
+  font-size: 13px;
+  font-weight: 650;
+}
+.accounting-table td {
+  border-bottom: 1px solid var(--line);
+}
+.accounting-table tr:last-child td {
+  border-bottom: 0;
+}
+.accounting-table :is(th, td):first-child {
+  text-align: left;
+}
+.accounting-table td.accounting-code {
+  font-weight: 750;
+}
+.accounting-table td:last-child {
+  font-weight: 650;
+}
+.accounting-cell-label {
+  display: none;
+}
+@media (max-width: 620px) {
+  .accounting-summary {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 10px;
+    margin-block: 16px 12px;
+  }
+  .accounting-card { padding: 13px; }
+  .accounting-table,
+  .accounting-table tbody { display: block; }
+  .accounting-table thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+  .accounting-table tbody tr {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 5px 10px;
+    padding: 10px 0;
+    border-top: 1px solid var(--line);
+  }
+  .accounting-table tbody td {
+    min-width: 0;
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 4px;
+    padding: 0;
+    border: 0;
+    font-size: 13px;
+  }
+  .accounting-cell-label {
+    display: inline;
+    color: var(--muted);
+    font-size: 11px;
+    font-weight: 500;
+    flex: 0 0 auto;
+  }
+}

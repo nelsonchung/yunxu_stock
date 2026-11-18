@@ -1,0 +1,23 @@
+[Unit]
+Description=Shioaji loopback accounting gateway for Yunxu Stock
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=exec
+DynamicUser=yes
+StateDirectory=yunxu-shioaji-accounting
+StateDirectoryMode=0700
+WorkingDirectory=/var/lib/yunxu-shioaji-accounting
+Environment=SJ_HOME_PATH=/var/lib/yunxu-shioaji-accounting
+Environment=SJ_HTTP_ADDR=127.0.0.1:8092
+Environment=SJ_HTTP_CORS=false
+EnvironmentFile=/etc/yunxu-shioaji-accounting/secrets.env
+UnsetEnvironment=SJ_CA_PATH SJ_CA_PASSWD SJ_PERSON_ID
+ExecStart=/opt/yunxu-shioaji/bin/shioaji server start --production --auth --no-open
+Restart=on-abnormal
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true

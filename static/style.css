@@ -157,6 +157,8 @@ h1 { font-size: clamp(28px, 4vw, 38px); line-height: 1.17; letter-spacing: .02em
 .view-controls button[aria-pressed="true"] { background: white; border-color: var(--line); color: var(--accent-dark); font-weight: 700; }
 .focus-picker { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--secondary); }
 .focus-picker select { width: min(45vw, 240px); }
+.focus-detail-controls { margin-top: 12px; }
+.focus-detail-controls button { padding-inline: 12px; }
 .layout-button { margin-left: auto; }
 .board {
   --columns: 2;
@@ -205,18 +207,44 @@ h1 { font-size: clamp(28px, 4vw, 38px); line-height: 1.17; letter-spacing: .02em
   color: var(--secondary);
   font-size: 12px;
 }
-.intraday-plot { display: block; width: 100%; height: 150px; margin-top: 6px; }
+.intraday-summary, .daily-grid-summary { container-type: inline-size; }
+.intraday-layout { display: grid; gap: 10px; margin-top: 6px; }
+.intraday-layout > div { min-width: 0; }
+.intraday-unavailable {
+  display: grid;
+  align-content: center;
+  justify-items: center;
+  gap: 3px;
+  min-height: 86px;
+  padding: 8px;
+  border: 1px dashed var(--line);
+  border-radius: 6px;
+  color: var(--secondary);
+  font-size: 12px;
+  text-align: center;
+}
+.daily-grid-summary .session-metrics {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.daily-depth-empty { margin-top: 8px; padding-top: 6px; border-top: 1px solid var(--line); color: var(--secondary); font-size: 11px; }
+.intraday-plot { display: block; width: 100%; height: 180px; }
 .intraday-chart-empty { margin-block: 9px; color: var(--muted); font-size: 12px; }
 .intraday-metrics {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 72px), 1fr));
-  gap: 6px 9px;
-  margin: 6px 0 0;
-  padding-top: 7px;
-  border-top: 1px solid var(--line);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  column-gap: 9px;
+  margin: 0;
 }
+.intraday-stat { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 0 4px; padding: 3px 0; border-bottom: 1px solid var(--line); }
 .intraday-stat dt { color: var(--muted); font-size: 11px; }
-.intraday-stat dd { margin: 0; font-size: 12px; font-weight: 650; overflow-wrap: anywhere; }
+.intraday-stat dd { margin: 0; font-size: 12px; font-weight: 650; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+@container (min-width: 390px) {
+  .intraday-layout { grid-template-columns: minmax(0, 1.08fr) minmax(0, 1fr); }
+  .intraday-plot { height: 265px; }
+}
 .intraday-balance { margin-top: 9px; }
 .intraday-balance-labels { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 3px 8px; font-size: 11px; }
 .intraday-balance-labels .market-green { color: var(--loss); }
@@ -230,8 +258,10 @@ h1 { font-size: clamp(28px, 4vw, 38px); line-height: 1.17; letter-spacing: .02em
 .intraday-depth { margin-top: 8px; font-size: 11px; }
 .intraday-depth summary { color: var(--secondary); font-weight: 650; cursor: pointer; }
 .intraday-depth table { width: 100%; table-layout: fixed; border-collapse: collapse; margin-top: 4px; }
-.intraday-depth td, .intraday-depth th { padding: 2px; text-align: right; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.intraday-depth td, .intraday-depth th { padding: 2px; text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .intraday-depth th { color: var(--muted); font-weight: 500; border-bottom: 1px solid var(--line); }
+.intraday-depth th:first-child, .intraday-depth th:last-child { width: 21%; }
+.intraday-depth tfoot { border-top: 1px solid var(--line); font-weight: 650; }
 .intraday-depth-bid { background: linear-gradient(to left, #dcebe3 var(--depth, 0%), transparent var(--depth, 0%)); }
 .intraday-depth-ask { background: linear-gradient(to right, #f3e2e1 var(--depth, 0%), transparent var(--depth, 0%)); }
 .history-coverage { margin-top: 8px; color: var(--secondary); font-size: 13px; font-variant-numeric: tabular-nums; }

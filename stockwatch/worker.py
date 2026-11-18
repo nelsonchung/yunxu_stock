@@ -13,7 +13,7 @@ from urllib.parse import urlencode, urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 from zoneinfo import ZoneInfo
 
-from .intraday import Intraday, configured_port
+from .intraday import Intraday, configured_http_token, configured_port
 from .store import range_start
 
 LOG = logging.getLogger(__name__)
@@ -208,7 +208,8 @@ class Worker:
         self.us_key = os.environ.get("ALPHA_VANTAGE_API_KEY", "").strip()
         self.us_full = os.environ.get("ALPHA_VANTAGE_FULL") == "1"
         self.finmind_history = os.environ.get("FINMIND_HISTORY") == "1"
-        self.intraday = Intraday(store, now, None if offline else configured_port())
+        port = None if offline else configured_port()
+        self.intraday = Intraday(store, now, port, configured_http_token() if port else None)
 
     def reserve(self, source, interval, ceiling, *, url=None):
         now = self.now()

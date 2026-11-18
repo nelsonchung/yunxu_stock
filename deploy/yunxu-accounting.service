@@ -1,0 +1,25 @@
+[Unit]
+Description=Yunxu Stock private read-only accounting page
+Wants=yunxu-shioaji-accounting.service
+After=yunxu-shioaji-accounting.service
+RequiresMountsFor=/media/nelson/work-disk/web-site/yunxu_stock
+
+[Service]
+Type=exec
+DynamicUser=yes
+WorkingDirectory=/media/nelson/work-disk/web-site/yunxu_stock
+LoadCredential=accounting-http-token:/etc/yunxu-shioaji-accounting/http-token
+ExecStart=/usr/bin/python3 -B -m stockwatch.accounting --port 8094 --broker-port 8092
+Restart=on-failure
+RestartSec=5
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+RestrictAddressFamilies=AF_UNIX AF_INET
+IPAddressDeny=any
+IPAddressAllow=localhost
+
+[Install]
+WantedBy=multi-user.target

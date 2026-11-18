@@ -6,6 +6,7 @@ const StockIntraday = (() => {
     timeZone: "Asia/Taipei", hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23",
   });
   const percentFormat = new Intl.NumberFormat("zh-TW", { maximumFractionDigits: 1 });
+  const depthPriceFormat = new Intl.NumberFormat("zh-TW", { maximumFractionDigits: 2 });
 
   function format(value, formatter = priceFormat) {
     return Number.isFinite(value) ? formatter.format(value) : "—";
@@ -44,13 +45,18 @@ const StockIntraday = (() => {
       const [askPrice, askSize] = asks[i] ?? [];
       for (const [side, value] of [["bid", bidSize], ["price", bidPrice], ["price", askPrice], ["ask", askSize]]) {
         const isPrice = side === "price";
-        const label = isPrice && value === 0 ? "市價" : format(value, isPrice ? priceFormat : volumeFormat);
+        const label = isPrice && value === 0 ? "市價" : format(value, isPrice ? depthPriceFormat : volumeFormat);
         const cell = element("td", isPrice ? "" : `intraday-depth-${side}`, label);
         if (!isPrice && Number.isFinite(value)) {
           cell.style.setProperty("--depth", `${value / scale * 100}%`);
         }
         row.append(cell);
       }
+    }
+    const totals = table.createTFoot().insertRow();
+    const amount = (levels) => levels.length ? volumeFormat.format(levels.reduce((sum, [, size]) => sum + size, 0)) : "—";
+    for (const label of [amount(bids), "買量小計", "賣量小計", amount(asks)]) {
+      totals.append(element("td", "", label));
     }
     detail.append(table);
     return detail;
@@ -62,8 +68,8 @@ const StockIntraday = (() => {
     const labels = element("div", "intraday-balance-labels");
     const share = bid / (bid + ask) * 100;
     labels.append(
-      element("span", "market-green", `內盤 ${percentFormat.format(share)}%`),
-      element("span", "market-red", `外盤 ${percentFormat.format(100 - share)}%`),
+      element("span", "market-green", `內盤 ${lots(bid)}（${percentFormat.format(share)}%）`),
+      element("span", "market-red", `外盤 ${lots(ask)}（${percentFormat.format(100 - share)}%）`),
     );
     const bar = element("div", "intraday-balance-bar");
     bar.setAttribute("aria-hidden", "true");
@@ -108,22 +114,26 @@ const StockIntraday = (() => {
       ["振幅", Number.isFinite(quote.amplitude) ? `${format(quote.amplitude)}%` : "—"],
     ]) metrics.append(numberPair(name, value));
 
-    summary.append(header, headline);
+    const layout = element("div", "intraday-layout");
+    const graph = element("div", "intraday-graph");
+    const details = element("div", "intraday-details");
+    summary.append(header, headline, layout);
+    layout.append(graph, details);
     const points = validPoints(quote);
     if (points.length) {
       const chart = element("canvas", "intraday-plot");
       chart.setAttribute("role", "img");
       chart.setAttribute("aria-label", `${stock.symbol} 盤中分時走勢與成交量，${points.length} 筆分線`);
       chartData.set(chart, { quote, points });
-      summary.append(chart);
+      graph.append(chart);
     } else {
-      summary.append(element("p", "intraday-chart-empty", "等待分時行情"));
+      graph.append(element("p", "intraday-chart-empty", "等待分時行情"));
     }
-    summary.append(metrics);
+    details.append(metrics);
     const balance = tradeBalance(quote);
     const depth = depthTable(quote, depthOpen);
-    if (balance) summary.append(balance);
-    if (depth) summary.append(depth);
+    if (balance) details.append(balance);
+    if (depth) details.append(depth);
     return summary;
   }
 
@@ -147,12 +157,19 @@ const StockIntraday = (() => {
     const start = Date.parse(`${quote.date}T09:00:00+08:00`);
     const duration = 270 * 60_000;
     const right = width - (width < 220 ? 46 : 58);
-    const bottom = height - 40;
+    const volumeHeight = Math.round(height * .17);
+    const bottom = height - volumeHeight - 21;
     const x = (t) => 3 + (t - start) / duration * (right - 3);
     const y = (price) => bottom - (price - lower) / (upper - lower) * (bottom - 9);
     const baseline = Number.isFinite(quote.previous_close) ? y(quote.previous_close) : null;
     ctx.font = "10px system-ui, sans-serif";
 
+    ctx.fillStyle = "#e7eeeb";
+    for (const minute of [0, 120, 240]) {
+      const from = x(start + minute * 60_000);
+      const to = x(start + Math.min(minute + 60, 270) * 60_000);
+      ctx.fillRect(from, 9, to - from, height - 26);
+    }
     for (let i = 0; i < 4; i += 1) {
       const price = lower + (upper - lower) * i / 3;
       ctx.beginPath();
@@ -190,7 +207,7 @@ const StockIntraday = (() => {
     const barWidth = Math.max(.7, (right - 3) / 270 * .85);
     for (const [time, , volume] of points) {
       if (!(volume > 0)) continue;
-      const barHeight = volume / maxVolume * 19;
+      const barHeight = volume / maxVolume * volumeHeight;
       ctx.fillStyle = "#87a6ac";
       ctx.fillRect(x(time) - barWidth / 2, height - 17 - barHeight, barWidth, barHeight);
     }
