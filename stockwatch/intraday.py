@@ -14,7 +14,6 @@ from zoneinfo import ZoneInfo
 
 TAIPEI = ZoneInfo("Asia/Taipei")
 MAX_IDS = 36
-DEMAND_SECONDS = 60
 SESSION_OPEN = time(9)
 SESSION_CLOSE = time(13, 30)
 SESSION_END = time(13, 35)
@@ -131,7 +130,7 @@ class Quote:
         return {
             **self.values, "closed": closed,
             "bids": [], "asks": [], **({} if closed else self.book),
-            "points": [[minute, *values] for minute, values in self.points.items()],
+            "points": [[minute, *values] for minute, values in sorted(self.points.items())],
         }
 
 
@@ -162,7 +161,8 @@ class Intraday:
         self.store, self.now, self.port = store, now, port
         self.auth_headers = {"Authorization": f"Bearer {http_token}"} if http_token else {}
         self.lock = threading.Lock()
-        self.demand = {}
+        self.tracked = {}
+        self.pending_minutes = {}
         self.quotes = {}
         self.day = None
         self.subscriptions = set()
@@ -181,19 +181,41 @@ class Intraday:
     def query_stocks(self, ids, day):
         with self.store.connect() as db:
             enabled = self.store.settings(db)["enabled"]
+            if ids == []:
+                return enabled, []
+            scope = f"AND s.id IN ({','.join('?' for _ in ids)})" if ids is not None else ""
             return enabled, list(db.execute(f"""
                 SELECT s.id,s.market,s.symbol,p.day,p.close FROM stocks s
                 LEFT JOIN prices p ON p.market=s.market AND p.symbol=s.symbol AND p.day=(
                     SELECT max(day) FROM prices WHERE market=s.market AND symbol=s.symbol AND day<?
                 )
-                WHERE s.market IN ('TWSE','TPEX') AND s.id IN ({','.join('?' for _ in ids)})
-            """, (day, *ids))) if ids else []
+                WHERE s.market IN ('TWSE','TPEX') {scope}
+                ORDER BY s.id LIMIT ?
+            """, (day, *(ids or []), MAX_IDS)))
 
     def roll_day(self, day):
         if self.day != day:
             self.day = day
-            self.demand.clear()
+            self.tracked.clear()
             self.quotes.clear()
+
+    def stored_quote(self, symbol, day):
+        if symbol not in self.quotes:
+            with self.store.connect() as db:
+                points = {r["minute"]: [r["close"], r["volume"]] for r in db.execute("""
+                    SELECT minute,close,volume FROM intraday_minutes
+                    WHERE day=? AND symbol=? ORDER BY minute
+                """, (day, symbol))}
+            self.quotes[symbol] = Quote(points=points)
+        return self.quotes[symbol]
+
+    def flush_minutes(self):
+        if not self.pending_minutes:
+            return
+        with self.store.connect() as db:
+            db.executemany("INSERT OR REPLACE INTO intraday_minutes VALUES (?,?,?,?,?)",
+                           ((*key, *point) for key, point in self.pending_minutes.items()))
+        self.pending_minutes.clear()
 
     def snapshot(self, ids):
         now = self.now()
@@ -209,16 +231,16 @@ class Intraday:
             for row in rows:
                 if not SYMBOL.fullmatch(row["symbol"]):
                     continue
-                key = (EXCHANGES[row["market"]], row["symbol"])
-                if enabled and session:
-                    self.demand[key] = (now + DEMAND_SECONDS, row["id"], row["day"], price(row["close"]))
-                quote = self.quotes.get(key[1])
-                if quote and quote.values:
+                quote = self.stored_quote(row["symbol"], self.day)
+                if quote.values:
                     state["quotes"][str(row["id"])] = quote.snapshot(local.time() >= SESSION_CLOSE)
-            excess = len(self.demand) - MAX_IDS
-            if excess > 0:
-                for key in sorted(self.demand, key=lambda key: self.demand[key][:2])[:excess]:
-                    del self.demand[key]
+                elif quote.points:
+                    minute = max(quote.points)
+                    state["quotes"][str(row["id"])] = {
+                        **quote.snapshot(True), "date": self.day, "timestamp": minute,
+                        "price": quote.points[minute][0], "fetched_at": 0,
+                        "previous_close": price(row["close"]), "history_only": True,
+                    }
             if not enabled:
                 state["status"] = "背景更新已暫停"
             elif not session:
@@ -234,15 +256,15 @@ class Intraday:
             return
         now = self.now()
         local = datetime.fromtimestamp(now, TAIPEI)
+        day = local.date().isoformat()
+        enabled, rows = self.query_stocks(None if trading_time(local) else [], day)
         with self.lock:
-            self.roll_day(local.date().isoformat())
-            for key, data in list(self.demand.items()):
-                if data[0] <= now:
-                    del self.demand[key]
-            ids = [data[1] for data in self.demand.values()] if trading_time(local) else []
-        enabled, rows = self.query_stocks(ids, local.date().isoformat())
-        desired = {(EXCHANGES[row["market"]], row["symbol"], kind) for row in rows
-                   for kind in FEEDS} if enabled else set()
+            self.flush_minutes()
+            self.roll_day(day)
+            self.tracked = {row["symbol"]: (EXCHANGES[row["market"]], row["day"], price(row["close"]))
+                            for row in rows if enabled and SYMBOL.fullmatch(row["symbol"])}
+            desired = {(exchange, symbol, kind) for symbol, (exchange, _, _) in self.tracked.items()
+                       for kind in FEEDS}
         if not desired:
             self.release()
             return
@@ -355,12 +377,15 @@ class Intraday:
             return
         code = payload.get("code")
         with self.lock:
-            demand = next((data for key, data in self.demand.items() if key[1] == code and data[0] > now), None)
-            if self.day != day or demand is None:
+            tracked = self.tracked.get(code)
+            if self.day != day or tracked is None:
                 return
-            quote = self.quotes.setdefault(code, Quote())
+            quote = self.stored_quote(code, day)
             if kind == FEEDS["Tick"]:
-                quote.apply_tick(payload, at, now, *demand[2:])
+                quote.apply_tick(payload, at, now, *tracked[1:])
+                if quote.at == at:
+                    minute = at.isoformat(timespec="minutes")
+                    self.pending_minutes[(day, code, minute)] = quote.points[minute]
             elif kind == FEEDS["BidAsk"]:
                 quote.apply_book(payload, at)
             self.status = ""
@@ -392,4 +417,6 @@ class Intraday:
     def close(self):
         with self.lock:
             self.stopping = True
+            self.tracked.clear()
+            self.flush_minutes()
         self.release()

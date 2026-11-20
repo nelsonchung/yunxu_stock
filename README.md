@@ -29,6 +29,8 @@ ssh -N -o ExitOnForwardFailure=yes -L 127.0.0.1:8094:127.0.0.1:8094 nelson@192.1
 
 純看盤使用具「行情／資料」與「正式環境」權限的金鑰。Shioaji 的下單憑證無需啟用。若本機服務啟用了 HTTP 驗證，透過 systemd 的 `LoadCredential=` 將其 Bearer 驗證內容提供為 `shioaji-http-token`。金鑰檔、驗證檔與憑證放在專案之外。
 
+樹莓派的行情服務使用官方 Shioaji Python SDK 接收成交與五檔，將行情轉給看板。部署設定在 `deploy/yunxu-shioaji-feed.conf`，SDK 安裝在獨立的 `/opt/yunxu-shioaji-feed` 虛擬環境。背景更新開啟時，盤中會主動收集自選股成交並將分線存入 SQLite，供稍晚開頁或重整時查看。分時圖只畫有成交資料的分鐘。
+
 在樹莓派執行 `sudoedit /etc/yunxu-stock.env`，加入本機 Shioaji 的實際埠號，儲存後執行 `sudo systemctl restart yunxu-stock`。以下用 8091 示意，可選未被其他服務佔用的埠。
 
 ```ini

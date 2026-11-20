@@ -55,6 +55,9 @@ class Store:
                 CREATE TABLE IF NOT EXISTS prices (
                     market TEXT, symbol TEXT, day TEXT, close REAL,
                     PRIMARY KEY(market,symbol,day));
+                CREATE TABLE IF NOT EXISTS intraday_minutes (
+                    day TEXT, symbol TEXT, minute TEXT, close REAL, volume REAL,
+                    PRIMARY KEY(day,symbol,minute));
                 CREATE TABLE IF NOT EXISTS fetches (
                     market TEXT, symbol TEXT, period TEXT, updated REAL,
                     PRIMARY KEY(market,symbol,period));

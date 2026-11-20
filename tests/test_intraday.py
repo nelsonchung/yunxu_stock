@@ -6,6 +6,7 @@ import unittest
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from unittest.mock import patch
 
 from stockwatch.intraday import Intraday, TAIPEI
 from stockwatch.store import Store
@@ -38,6 +39,8 @@ class IntradayTests(unittest.TestCase):
 
     def test_quote_uses_stored_close_and_ignores_nonregular_and_stale_ticks(self):
         intraday = Intraday(self.store, lambda: self.now, 8085)
+        with patch.object(intraday, "receive"):
+            intraday.sync()
         state = intraday.snapshot([1, 444])
         self.assertTrue(state["session"])
         self.assertEqual(state["quotes"], {})
@@ -55,10 +58,14 @@ class IntradayTests(unittest.TestCase):
         self.assertEqual(quote["points"], [[DAY + "T09:45+08:00", 699, 10]])
         self.assertEqual(quote["bids"], [[697, 2], [696, 10]])
         self.assertEqual(quote["volume"], 789)
+        intraday.close()
+        restored = Intraday(self.store, lambda: self.now, 8085).snapshot([1])["quotes"]["1"]
+        self.assertTrue(restored["history_only"])
+        self.assertEqual(restored["points"], quote["points"])
         self.now += 86400
         self.assertEqual(intraday.snapshot([1])["quotes"], {})
 
-    def test_missing_config_and_no_visible_demand_do_not_connect(self):
+    def test_missing_config_and_outside_session_do_not_connect(self):
         intraday = Intraday(self.store, lambda: self.now, None)
         self.assertFalse(intraday.snapshot([1])["configured"])
         intraday.sync()
@@ -116,7 +123,6 @@ class IntradayTests(unittest.TestCase):
             thread.start()
             intraday = Intraday(self.store, lambda: self.now, server.server_port, token)
             try:
-                intraday.snapshot([1])
                 intraday.sync()
                 if simulation:
                     intraday.receiver.join(2)
@@ -133,6 +139,9 @@ class IntradayTests(unittest.TestCase):
                                       if method == "POST" for body in rest],
                                      [("/api/v1/stream/subscribe", "BidAsk"), ("/api/v1/stream/subscribe", "Tick")])
                     self.now += 61
+                    intraday.sync()
+                    self.assertFalse(any("unsubscribe" in entry[1] for entry in actions))
+                    self.now = datetime(2026, 11, 16, 13, 35, tzinfo=TAIPEI).timestamp()
                     intraday.sync()
                     self.assertEqual([entry[1] for entry in actions[-2:]], ["/api/v1/stream/unsubscribe"] * 2)
             finally:

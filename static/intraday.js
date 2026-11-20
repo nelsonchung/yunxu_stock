@@ -89,7 +89,7 @@ const StockIntraday = (() => {
   function create(stock, quote, session, depthOpen = true) {
     const summary = element("section", "session-summary intraday-summary");
     const age = Date.now() / 1000 - quote.fetched_at;
-    const label = !session || quote.closed ? "盤中整股快照" :
+    const label = quote.history_only ? "已保存分線" : !session || quote.closed ? "盤中整股快照" :
       age > 90 ? "報價暫未更新" : "盤中整股";
     const timestamp = new Date(quote.timestamp);
     const header = element("div", "session-heading", label);
@@ -126,6 +126,13 @@ const StockIntraday = (() => {
       chart.setAttribute("aria-label", `${stock.symbol} 盤中分時走勢與成交量，${points.length} 筆分線`);
       chartData.set(chart, { quote, points });
       graph.append(chart);
+      const first = points[0][0];
+      const latest = points.at(-1)[0];
+      const open = Date.parse(`${quote.date}T09:00:00+08:00`);
+      if (first > open || points.some(([time], i) => i > 0 && time - points[i - 1][0] > 60_000)) {
+        graph.append(element("p", "intraday-chart-empty",
+          `已取得 ${timeFormat.format(first)} 至 ${timeFormat.format(latest)} 的分線，缺少的分鐘留空。`));
+      }
     } else {
       graph.append(element("p", "intraday-chart-empty", "等待分時行情"));
     }
@@ -213,7 +220,7 @@ const StockIntraday = (() => {
     }
     ctx.beginPath();
     points.forEach(([time, close], index) => {
-      if (index === 0) ctx.moveTo(x(time), y(close));
+      if (index === 0 || time - points[index - 1][0] > 60_000) ctx.moveTo(x(time), y(close));
       else ctx.lineTo(x(time), y(close));
     });
     ctx.strokeStyle = "#2e61a5";
